@@ -1,0 +1,40 @@
+data_folder: data
+
+training_start_date: 2024-08-01
+training_end_date: 2024-09-01
+validation_end_date: 2024-10-01
+test_end_date: 2024-10-10
+
+regions:
+  - ap-northeast-1
+  # - ap-northeast-2 
+  # - ap-northeast-3
+  # - ap-south-1
+  # - ap-southeast-1
+  # - ap-southeast-2
+  # - ca-central-1
+  # - eu-central-1
+  # - eu-north-1
+  # - eu-west-1
+  # - eu-west-2
+  # - eu-west-3
+  # - sa-east-1
+  # - us-east-1
+  # - us-east-2
+  # - us-west-1
+  # - us-west-2
+
+target_col: spot_price
+time_col: price_timestamp
+categorical_cols:
+  - region
+  - av_zone
+  - instance_type
+  - instance_family
+  - generation
+  - os
+numerical_cols:
+  - size
+  - vcpu
+  - memory
+  - ondemand_price
