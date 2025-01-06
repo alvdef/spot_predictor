@@ -1,0 +1,15 @@
+data_folder: data
+
+start_date: 2023-10-01
+end_date: 2024-12-30
+
+sequence_length: 28
+prediction_length: 1
+timestep_hours: 4
+window_step: 4
+
+regions:
+  - eu-central-1
+
+target_col: spot_price
+time_col: price_timestamp

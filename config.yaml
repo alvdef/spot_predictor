@@ -1,19 +1,24 @@
 data_folder: data
 
-training_start_date: 2024-08-01
-training_end_date: 2024-09-01
-validation_end_date: 2024-10-01
-test_end_date: 2024-10-10
+training_start_date: 2023-10-01   # 2023-10-01
+training_end_date: 2024-10-30   # 2024-09-30
+validation_end_date: 2024-11-15   # 2024-11-15
+test_end_date: 2024-12-30   # 2024-12-30
+
+sequence_length: 28
+prediction_length: 1
+timestep_hours: 4
+window_step: 4
 
 regions:
-  - ap-northeast-1
+  # - ap-northeast-1
   # - ap-northeast-2 
   # - ap-northeast-3
   # - ap-south-1
   # - ap-southeast-1
   # - ap-southeast-2
   # - ca-central-1
-  # - eu-central-1
+  - eu-central-1
   # - eu-north-1
   # - eu-west-1
   # - eu-west-2
@@ -23,18 +28,28 @@ regions:
   # - us-east-2
   # - us-west-1
   # - us-west-2
+product_description: Linux/UNIX
 
 target_col: spot_price
 time_col: price_timestamp
 categorical_cols:
-  - region
+  # - region
   - av_zone
-  - instance_type
   - instance_family
   - generation
-  - os
-numerical_cols:
   - size
-  - vcpu
-  - memory
-  - ondemand_price
+
+multicategorical_cols:
+  - modifiers
+  - architectures
+
+numerical_cols:
+  # - on_demand_price
+  # - hour_sin
+  # - hour_cos
+  - dow_sin
+  - dow_cos
+  - dom_sin
+  - dom_cos
+  # - doy_sin
+  # - doy_cos
