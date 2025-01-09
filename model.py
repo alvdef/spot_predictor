@@ -1,138 +1,340 @@
-import numpy as np
 import torch
 import torch.nn as nn
-import matplotlib.pyplot as plt
+import numpy as np
+from torch.optim import SGD
+from torch.utils.data import DataLoader
+import time
+from datetime import timedelta
+from tqdm import tqdm
+from tqdm.auto import trange
 
 
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size):
-        super(LSTMModel, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
+class SpotBiLSTM(nn.Module):
+    def __init__(self, model_config, device):
+        super().__init__()
+        self.device = device
+        self.hidden_size = model_config["hidden_size"]
+        self.n_layers = model_config["n_layers"]
+        self.output_scale = model_config["output_scale"]
+
+        # Bidirectional LSTM layers
+        self.lstm1 = nn.LSTM(
+            input_size=1,
+            hidden_size=self.hidden_size,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.lstm2 = nn.LSTM(
+            input_size=self.hidden_size * 2,
+            hidden_size=self.hidden_size,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+
+        # Final dense layer
+        self.dense = nn.Linear(self.hidden_size * 2, 1)
 
     def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        out, _ = self.lstm(x, (h0, c0))
-        out = self.fc(out[:, -1, :])
-        return out
+        # Add channel dimension if not present
+        if len(x.shape) == 2:
+            x = x.unsqueeze(-1)
+
+        # First LSTM layer
+        x, _ = self.lstm1(x)
+
+        # Second LSTM layer
+        x, _ = self.lstm2(x)
+
+        # Take only the last output
+        x = x[:, -1, :]
+
+        # Dense layer
+        x = self.dense(x)
+
+        # Scale output
+        x = x * self.output_scale
+
+        return x
 
 
-def save_checkpoint(model, optimizer, epoch, file_path="model_checkpoint.pth"):
-    checkpoint = {
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-    }
-    torch.save(checkpoint, file_path)
-    print(f"Checkpoint saved at epoch {epoch}")
+def setup_training(model, config, device):
+    """Initialize model, optimizer, criterion and scheduler for training"""
+    model = model.to(device)
+    criterion = nn.MSELoss()
+    optimizer = SGD(
+        model.parameters(),
+        lr=config["learning_rate"],
+        momentum=config["optimizer"]["momentum"],
+    )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+    )
+    return model, criterion, optimizer, scheduler
 
 
-def load_checkpoint(input_size, hidden_size, num_layers, output_size, learning_rate, file_path="model_checkpoint.pth"):
-    checkpoint = torch.load(file_path)
-    model = LSTMModel(input_size, hidden_size, num_layers, output_size)
-    model.device = torch.device("mps" if torch.mps.is_available() else "cpu")
-    model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    epoch = checkpoint["epoch"]
-    model.to(model.device)
-    print(f"Checkpoint loaded from epoch {epoch}")
-    return model, optimizer, epoch
-
-
-def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs, 
-                scheduler=None, early_stopping=None, grad_clip=None, 
-                checkpoint_interval=5, checkpoint_path="model_checkpoint.pth"):
+def train_epoch(model, train_loader, criterion, optimizer, device):
+    """Train model for one epoch"""
     model.train()
-    train_losses, val_losses = [], []
-    best_val_loss = float('inf')
-    for epoch in range(num_epochs):
-        epoch_loss = 0
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(model.device), targets.to(model.device)
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            if grad_clip:
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            epoch_loss += loss.item()
+    epoch_loss = 0
+    num_batches = len(train_loader)
 
-        train_losses.append(epoch_loss / len(train_loader))
+    # Use tqdm for batch progress
+    pbar = tqdm(train_loader, leave=False)
+    for data, target in pbar:
+        # Move data to device
+        data, target = data.to(device), target.to(device)
 
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for inputs, targets in val_loader:
-                inputs, targets = inputs.to(model.device), targets.to(model.device)
-                outputs = model(inputs)
-                val_loss += criterion(outputs, targets).item()
-        val_loss /= len(val_loader)
-        val_losses.append(val_loss)
+        # Forward pass
+        optimizer.zero_grad()
+        output = model(data)
+        loss = criterion(output, target)
 
-        if scheduler:
-            scheduler.step(val_loss)
+        # Backward pass
+        loss.backward()
+        optimizer.step()
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            if early_stopping:
-                early_stopping.counter = 0
-        else:
-            if early_stopping:
-                early_stopping.counter += 1
-                if early_stopping.counter >= early_stopping.patience:
-                    print("Early stopping triggered.")
+        # Accumulate loss
+        epoch_loss += loss.item()
+
+        # Update progress bar
+        pbar.set_description(f"Training loss: {loss.item():.6f}")
+
+    return epoch_loss / num_batches
+
+
+def check_early_stopping(val_loss, best_val_loss, patience_counter, patience_limit):
+    """Check if early stopping criteria is met"""
+    stop_training = False
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        patience_counter = 0
+    else:
+        patience_counter += 1
+        if patience_counter >= patience_limit:
+            stop_training = True
+
+    return stop_training, best_val_loss, patience_counter
+
+
+def log_metrics(history, train_loss, val_loss=None, lr=None):
+    """Log training metrics"""
+    history["train_loss"].append(train_loss)
+    if val_loss is not None:
+        history["val_loss"].append(val_loss)
+    if lr is not None:
+        history["lr"].append(lr)
+    return history
+
+
+class TrainingLogger:
+    def __init__(self, total_epochs):
+        self.total_epochs = total_epochs
+        self.start_time = time.time()
+        self.epoch_messages = []
+        
+    def print_header(self):
+        """Print global training information header"""
+        print("\n" + "="*80)
+        print(f"Training for {self.total_epochs} epochs")
+        print("="*80 + "\n")
+        
+    def log_epoch(self, epoch, train_loss, val_loss=None, lr=None):
+        """Log epoch results and store message"""
+        elapsed = time.time() - self.start_time
+        eta = (elapsed / (epoch + 1)) * (self.total_epochs - (epoch + 1)) if epoch > 0 else 0
+        
+        msg = f"Epoch [{epoch+1}/{self.total_epochs}] "
+        msg += f"Train Loss: {train_loss:.6f} "
+        if val_loss:
+            msg += f"Val Loss: {val_loss:.6f} "
+        if lr:
+            msg += f"LR: {lr:.2e} "
+        msg += f"│ Elapsed time: {timedelta(seconds=int(elapsed))} | Estimated remaining time: {timedelta(seconds=int(eta))}"
+        
+        self.epoch_messages.append(msg)
+        print(msg)
+        
+    def _display_progress(self):
+        """Clear screen and redisplay all messages"""
+        # Clear previous output (ANSI escape sequence)
+        print("\033[2J\033[H", end="")
+        # Print header
+        self.print_header()
+        # Print all epoch messages
+        for msg in self.epoch_messages:
+            print(msg)
+
+
+def train_model(model, train_loader, config, device, val_loader=None):
+    """Train model with early stopping and learning rate scheduling"""
+    # Setup
+    model, criterion, optimizer, scheduler = setup_training(model, config, device)
+    history = {"train_loss": [], "val_loss": [], "lr": []}
+    
+    # Initialize logger
+    logger = TrainingLogger(config["epochs"])
+    logger.print_header()
+
+    # Early stopping setup
+    best_val_loss = float("inf")
+    patience_counter = 0
+    patience_limit = 10
+
+    try:
+        for epoch in range(config["epochs"]):
+            # Train one epoch
+            train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+            
+            # Validation
+            val_loss = None
+            if val_loader is not None:
+                val_loss = validate_model(model, val_loader, criterion, device)
+                scheduler.step(val_loss)
+
+                # Check early stopping
+                stop_training, best_val_loss, patience_counter = check_early_stopping(
+                    val_loss, best_val_loss, patience_counter, patience_limit
+                )
+
+                if val_loss < best_val_loss:
+                    torch.save(model.state_dict(), "best_model.pth")
+                    print("New best model saved!")
+                
+                if stop_training:
+                    logger.log_epoch(epoch, train_loss, val_loss, 
+                                  optimizer.param_groups[0]["lr"])
+                    print("\nEarly stopping triggered")
                     break
 
-        # Save every 'checkpoint_interval' epochs
-        if (epoch + 1) % checkpoint_interval == 0:
-            save_checkpoint(model, optimizer, epoch + 1, checkpoint_path)
+            # Log metrics
+            current_lr = optimizer.param_groups[0]["lr"]
+            history = log_metrics(history, train_loss, val_loss, current_lr)
+            
+            # Log epoch
+            logger.log_epoch(epoch, train_loss, val_loss, current_lr)
 
-        model.train()
-        print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_losses[-1]:.4f}, Val Loss: {val_loss:.4f}")
-    return train_losses, val_losses
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user")
+    except Exception as e:
+        print(f"\nError during training: {str(e)}")
+        raise
+
+    # Print final summary
+    elapsed = time.time() - logger.start_time
+    print("\n" + "="*80)
+    print(f"Training completed in {timedelta(seconds=int(elapsed))}")
+    print("="*80 + "\n")
+
+    return history
 
 
-def forecast(model, data_loader):
-    model.eval()
-    forecasts = []
-    with torch.no_grad():
-        for inputs, _ in data_loader:
-            inputs = inputs.to(model.device)
-            outputs = model(inputs)
-            forecasts.append(outputs.cpu().numpy())
-    return np.concatenate(forecasts)
-
-
-def evaluate_model(model, data_loader, criterion):
+def validate_model(model, val_loader, criterion, device):
     model.eval()
     total_loss = 0
+
     with torch.no_grad():
-        for inputs, targets in data_loader:
-            inputs, targets = inputs.to(model.device), targets.to(model.device)
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
+        for data, target in val_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            loss = criterion(output, target)
             total_loss += loss.item()
-    return total_loss / len(data_loader)
+
+    return total_loss / len(val_loader)
 
 
-def plot_training_loss(train_losses, val_losses):
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_losses, label="Training Loss")
-    plt.plot(val_losses, label="Validation Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Training and Validation Loss Over Time")
-    plt.legend()
-    plt.show()
+def model_forecast(model, series, window_size, batch_size, device):
+    """Generate predictions using sliding windows"""
+    model = model.to(device)
+    model.eval()
+
+    windows = []
+    for i in range(len(series) - window_size + 1):
+        window = series[i : i + window_size]
+        windows.append(window)
+
+    windows = torch.tensor(windows, dtype=torch.float32)
+    dataset = DataLoader(windows, batch_size=batch_size)
+
+    forecasts = []
+    with torch.no_grad():
+        for batch in dataset:
+            batch = batch.to(device)
+            forecast = model(batch)
+            forecasts.append(forecast.cpu())
+
+    return torch.cat(forecasts).numpy().squeeze()
 
 
-def create_data_loader(X, y, batch_size, shuffle=True):
-    dataset = torch.utils.data.TensorDataset(
-        torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+def find_lr(model, train_loader, device, init_value=1e-8, final_value=1, beta=0.98):
+    """Perform learning rate range test to find optimal learning rate.
+
+    Implementation of the learning rate range test proposed by Leslie Smith
+    in the paper "Cyclical Learning Rates for Training Neural Networks"
+
+    Args:
+        model: Neural network model
+        train_loader: DataLoader with training data
+        device: Computing device (cpu/cuda/mps)
+        init_value: Starting learning rate
+        final_value: Maximum learning rate to test
+        beta: Smoothing factor for loss tracking
+
+    Returns:
+        tuple: (log_learning_rates, smoothed_losses)
+    """
+    # Setup
+    model, criterion, optimizer, _ = setup_training(
+        model, {"learning_rate": init_value, "optimizer": {"momentum": 0.9}}, device
     )
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+    # Initialize tracking variables
+    num_batches = len(train_loader)
+    mult = (final_value / init_value) ** (1 / num_batches)  # LR multiplier
+    lr = init_value
+    losses, log_lrs = [], []
+    avg_loss = min_loss = float("inf")
+    optimal_lr = None
+
+    # Use tqdm for progress tracking
+    with tqdm(train_loader, desc="Finding LR", leave=False) as pbar:
+        for batch_idx, (data, target) in enumerate(pbar, 1):
+            # Skip empty batches
+            if data.numel() == 0 or target.numel() == 0:
+                continue
+
+            # Training step
+            optimizer.zero_grad()
+            loss = criterion(model(data.to(device)), target.to(device))
+            loss.backward()
+            optimizer.step()
+
+            # Update smoothed loss
+            curr_loss = loss.item()
+            avg_loss = beta * avg_loss + (1 - beta) * curr_loss
+            smoothed_loss = avg_loss / (1 - beta**batch_idx)
+
+            # Track metrics
+            if smoothed_loss < min_loss:
+                min_loss = smoothed_loss
+                optimal_lr = lr
+
+            losses.append(smoothed_loss)
+            log_lrs.append(np.log10(lr))
+
+            # Update progress bar
+            pbar.set_postfix({"lr": f"{lr:.2e}", "loss": f"{smoothed_loss:.6f}"})
+
+            # Check for loss explosion
+            if batch_idx > 1 and smoothed_loss > 4 * min_loss:
+                print("Loss explosion detected. Stopping early.")
+                break
+
+            # Update learning rate
+            lr *= mult
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
+
+    print(f"Suggested learning rate: {optimal_lr:.2e}")
+    return log_lrs, losses
