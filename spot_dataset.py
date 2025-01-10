@@ -9,6 +9,9 @@ class SpotPriceDataset(Dataset):
         self.config = config
         self._validate_config()
         
+        # Ensure prediction_length is set
+        self.prediction_length = config.get("prediction_length", 1)
+        
         X, y = self._create_sequences(df)
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -16,11 +19,14 @@ class SpotPriceDataset(Dataset):
             self.X = self.X.to(device)
             self.y = self.y.to(device)
 
-    def get_data_loader(self, shuffle=True):
+    def get_data_loader(self, batch_size=None, shuffle=True, num_workers=0, pin_memory=False):
+        """Get data loader with configurable parameters"""
         return torch.utils.data.DataLoader(
             self,
-            batch_size=self.config["batch_size"],
-            shuffle=shuffle
+            batch_size=batch_size or self.config["batch_size"],
+            shuffle=shuffle,
+            num_workers=num_workers,
+            pin_memory=pin_memory
         )
 
 
@@ -64,9 +70,26 @@ class SpotPriceDataset(Dataset):
     
     def _validate_config(self) -> None:
         """Validate configuration parameters."""
-        required_fields = ["sequence_length", "window_step", "batch_size"]
+        required_fields = [
+            "sequence_length", 
+            "window_step", 
+            "batch_size"
+        ]
+        optional_fields = {
+            "prediction_length": 1,
+            "shuffle": True,
+            "num_workers": 0,
+            "pin_memory": False
+        }
+        
+        # Check required fields
         for field in required_fields:
             if field not in self.config:
                 raise ValueError(f"Missing required config field: {field}")
+                
+        # Set defaults for optional fields
+        for field, default in optional_fields.items():
+            if field not in self.config:
+                self.config[field] = default
 
 

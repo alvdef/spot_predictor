@@ -1,7 +1,7 @@
 data_folder: data
 
-start_date: 2023-10-01   # 2023-10-01
-end_date: 2024-10-01   # 2024-12-30
+start_date: 2024-04-01   # 2023-10-01
+end_date: 2024-10-20   # 2024-12-30
 
 sequence_length: 28
 timestep_hours: 4
@@ -15,13 +15,13 @@ regions:
   # - ap-southeast-1
   # - ap-southeast-2
   # - ca-central-1
-  - eu-central-1
+  # - eu-central-1
   # - eu-north-1
   # - eu-west-1
   # - eu-west-2
   # - eu-west-3
   # - sa-east-1
-  # - us-east-1
+  - us-east-1
   # - us-east-2
   # - us-west-1
   # - us-west-2
