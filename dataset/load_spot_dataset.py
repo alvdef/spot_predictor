@@ -6,8 +6,9 @@ import pandas as pd
 import numpy as np
 from functools import lru_cache
 import glob
-import yaml
 import ast
+
+from utils import load_config
 
 
 class LoadSpotDataset:
@@ -22,13 +23,20 @@ class LoadSpotDataset:
         logger: Logger instance for debug/error messages
     """
 
-    def __init__(self, config_path: str, data_dir: str):
+    def __init__(self, config_path: str = "config.yaml", data_dir: str = "data"):
         """Initialize dataset loader.
 
         Args:
             config_path: Path to YAML config file
         """
-        self.config = self._load_config(config_path)
+        required_fields = [
+            "regions",
+            "data_folder",
+            "time_col",
+            "target_col",
+            "timestep_hours",
+        ]
+        self.config = load_config(config_path, "dataset_features", required_fields)
         self.data_dir = os.path.join(data_dir)
         self.logger = logging.getLogger(__name__)
 
@@ -38,16 +46,6 @@ class LoadSpotDataset:
         except Exception as e:
             self.logger.error(f"Failed to initialize S3 client: {str(e)}")
             raise
-
-        # Validate config
-        self._validate_config()
-
-    def _validate_config(self) -> None:
-        """Validate configuration parameters."""
-        required_fields = ["regions", "data_folder", "time_col", "target_col"]
-        for field in required_fields:
-            if field not in self.config:
-                raise ValueError(f"Missing required config field: {field}")
 
     @lru_cache(maxsize=32)
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -61,7 +59,9 @@ class LoadSpotDataset:
         """
         try:
             if not os.path.exists(self.data_dir):
-                self.logger.info(f"{self.data_dir} does not exist. Downloading files from S3...")
+                self.logger.info(
+                    f"{self.data_dir} does not exist. Downloading files from S3..."
+                )
                 self._download_files()
 
             prices_dfs = []
@@ -78,7 +78,7 @@ class LoadSpotDataset:
                 region_prices_df = self.read_prices_files(region)
                 if not region_prices_df.empty:
                     prices_dfs.append(region_prices_df)
-            
+
             if not prices_dfs or not instance_info_dfs:
                 raise ValueError("No data loaded for any region")
 
@@ -148,9 +148,7 @@ class LoadSpotDataset:
         """Read and preprocess price data for a region."""
         try:
             # load prices on dataframes
-            prices_files = glob.glob(
-                f"{self.data_dir}/prices_{region}_*.csv"
-            )
+            prices_files = glob.glob(f"{self.data_dir}/prices_{region}_*.csv")
             prices_df_list = [
                 pd.read_csv(file)
                 for file in prices_files
@@ -169,7 +167,6 @@ class LoadSpotDataset:
                 (prices_df[self.config["time_col"]] >= self.config["start_date"])
                 & (prices_df[self.config["time_col"]] <= self.config["end_date"])
             ]
-            prices_df = self._validate_instance_history(prices_df)
 
             prices_df = self._group_prices_hour(prices_df)
             # TODO: ARREGLAR METODO
@@ -180,16 +177,6 @@ class LoadSpotDataset:
             self.logger.error(f"Failed to read prices for {region}: {str(e)}")
             return pd.DataFrame()
 
-    def _load_config(self, config_path: str) -> dict:
-        with open(config_path, "r") as config_file:
-            config = yaml.safe_load(config_file)
-            for key in [
-                "start_date",
-                "end_date",
-            ]:
-                config[key] = pd.to_datetime(config[key]).tz_localize("UTC")
-            return config
-            
     def _download_files(self) -> None:
         """Download required files from S3."""
         try:
@@ -223,12 +210,6 @@ class LoadSpotDataset:
             raise ValueError("Instance info dataframe is empty")
         if prices_df[self.config["time_col"]].isna().any():
             raise ValueError(f"Missing values in {self.config['time_col']}")
-
-    def _validate_instance_history(self, df: pd.DataFrame) -> pd.DataFrame:
-        min_records = (self.config["sequence_length"]) * 0.8
-        instance_counts = df.groupby("id_instance").size()
-        valid_instances = instance_counts[instance_counts >= min_records].index
-        return df[df["id_instance"].isin(valid_instances)]
 
     def _group_prices_hour(self, prices_df: pd.DataFrame) -> pd.DataFrame:
         id_instances = prices_df["id_instance"].unique()

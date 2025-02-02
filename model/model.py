@@ -1,33 +1,79 @@
+import torch
 import torch.nn as nn
+from abc import ABC, abstractmethod
+
+from utils import get_device, load_config
 
 
-class SpotBiLSTM(nn.Module):
-    def __init__(self, model_config, device):
+class Model(nn.Module, ABC):
+    def __init__(self):
         super().__init__()
-        self.device = device
-        self.hidden_size = model_config.get("hidden_size", 128)
-        self.output_scale = model_config.get("output_scale", 1.0)
-        self.input_size = model_config.get("input_size", 1)
-        self.num_layers = model_config.get("num_layers", 2)  # Default: 2 layers
-        self.dropout_rate = model_config.get("dropout_rate", 0.0)
+        self.device = get_device()
 
-        # Single LSTM with multiple layers
+    @abstractmethod
+    def forward(self, x):
+        pass
+
+    @torch.no_grad()
+    def forecast(self, sequence, n_steps):
+        """
+        Generate recursive predictions for n_steps ahead.
+
+        Args:
+            sequence (torch.Tensor): Input sequence of shape (batch_size, sequence_length)
+                                   or (batch_size, sequence_length, 1)
+            n_steps (int): Number of steps to predict
+
+        Returns:
+            torch.Tensor: Predictions of shape (batch_size, n_steps)
+        """
+        self.eval()
+
+        if len(sequence.shape) == 2:
+            sequence = sequence.unsqueeze(-1)
+
+        batch_size = sequence.shape[0]
+        predictions = torch.zeros((batch_size, n_steps), device=self.device)
+        current_sequence = sequence
+
+        for step in range(n_steps):
+            output = self(current_sequence)
+            predictions[:, step] = output.squeeze()
+            current_sequence = torch.cat(
+                [current_sequence[:, 1:, :], output.unsqueeze(1)], dim=1
+            )
+
+        return predictions
+
+
+class SpotLSTM(Model):
+    REQUIRED_FIELDS = [
+        "hidden_size",
+        "output_scale",
+        "input_size",
+        "num_layers",
+        "dropout_rate",
+    ]
+
+    def __init__(self, config_path: str):
+        super().__init__()
+
+        self.config = load_config(config_path, "model_config", self.REQUIRED_FIELDS)
+
         self.lstm = nn.LSTM(
-            input_size=self.input_size,
-            hidden_size=self.hidden_size,
-            num_layers=self.num_layers,
+            hidden_size=self.config["hidden_size"],
+            input_size=self.config["input_size"],
+            num_layers=self.config["num_layers"],
             batch_first=True,
-            bidirectional=True,
             dropout=(
-                self.dropout_rate if self.num_layers > 1 else 0.0
-            ),  # Apply dropout only if layers > 1
+                self.config["dropout_rate"] if self.config["num_layers"] > 1 else 0.0
+            ),
         )
 
-        # Final dense layer
-        self.dense = nn.Linear(self.hidden_size * 2, 1)
-
-        # Initialize parameters
+        self.dense = nn.Linear(self.config["hidden_size"], 1)
         self._initialize_weights()
+        # Move model to the correct device
+        self.to(self.device)
 
     def _initialize_weights(self):
         for name, param in self.lstm.named_parameters():
@@ -39,13 +85,12 @@ class SpotBiLSTM(nn.Module):
         nn.init.zeros_(self.dense.bias)
 
     def forward(self, x):
-        # Add channel dimension if not present
         if len(x.shape) == 2:
             x = x.unsqueeze(-1)
 
-        x, _ = self.lstm(x)  # First LSTM layer
-        x = x[:, -1, :]  # Take only the last output
-        x = self.dense(x)  # Dense layer
-        x = x * self.output_scale  # Scale output
+        x, _ = self.lstm(x)
+        x = x[:, -1, :]
+        x = self.dense(x)
+        x = x * self.config["output_scale"]
 
         return x

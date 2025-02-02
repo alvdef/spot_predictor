@@ -3,3 +3,5 @@ venv
 _*
 logs
 !__init__.py
+checkpoints
+output

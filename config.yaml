@@ -1,36 +1,45 @@
-data_folder: data
+dataset_features:
+  data_folder: data
+  start_date: 2024-04-01   # 2023-10-01
+  end_date: 2024-10-20   # 2024-12-30
+  regions:
+    - us-east-1
+  product_description: Linux/UNIX
+  target_col: spot_price
+  time_col: price_timestamp
+  timestep_hours: 4
 
-start_date: 2024-04-01   # 2023-10-01
-end_date: 2024-10-20   # 2024-12-30
+dataset_config:
+  sequence_length: 28     # Num of time steps in input sequence (4*7dias)
+  window_step: 4          # Step size between consecutive sequences
+  batch_size: 32          # Num of samples per batch
+  prediction_length: 1    # Num of future time steps to predict
 
-sequence_length: 28
-timestep_hours: 4
-window_step: 4
+model_config:
+  input_size: 1           # Num of input features
+  dropout_rate: 0.0       # Regularization technique that turns off x% of neurons in the training proccess
+  hidden_size: 64         # Num of hidden units in LSTM layers
+  num_layers: 2           # Num of stacked LSTM layers
+  output_scale: 100.0     # Scaling factor for model outputs to handle price ranges
+  shuffle_buffer: 1000     # Buffer size for dataset shuffling
 
-regions:
-  # - ap-northeast-1
-  # - ap-northeast-2 
-  # - ap-northeast-3
-  # - ap-south-1
-  # - ap-southeast-1
-  # - ap-southeast-2
-  # - ca-central-1
-  # - eu-central-1
-  # - eu-north-1
-  # - eu-west-1
-  # - eu-west-2
-  # - eu-west-3
-  # - sa-east-1
-  - us-east-1
-  # - us-east-2
-  # - us-west-1
-  # - us-west-2
-product_description: Linux/UNIX
+training_hyperparams:
+  epochs: 85              # Num of training epochs
+  learning_rate: 6e-07    # Initial learning rate for optimizer
+  max_learning_rate: 1e-5 # Maximum learning rate for scheduler
+  weight_decay: 1e-5      # L2 regularization factor
+  mse_weight: 0.7
+  adam_betas: (0.9, 0.999) # control the decay rates of moving averages (momentum, uncentered variance)
 
-target_col: spot_price
-time_col: price_timestamp
+evaluate_config:
+  eval_step: 28           # Num of timesteps
+  sequence_length: 28
+  prediction_length: 80   # 4*20dias
+  n_timesteps: 20         # 4*5dias
+  batch_size: 32
+
+
 categorical_cols:
-  # - region
   - av_zone
   - instance_family
   - generation
@@ -41,16 +50,7 @@ multicategorical_cols:
   - architectures
 
 numerical_cols:
-  # - on_demand_price
-  # - hour_sin
-  # - hour_cos
   - dow_sin
   - dow_cos
   - dom_sin
   - dom_cos
-  # - doy_sin
-  # - doy_cos
-
-time_features:
-  # - dayofweek
-  # - dayofmonth
