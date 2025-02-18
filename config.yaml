@@ -10,33 +10,33 @@ dataset_features:
   timestep_hours: 4
 
 dataset_config:
-  sequence_length: 28     # Num of time steps in input sequence (4*7dias)
-  window_step: 4          # Step size between consecutive sequences
+  sequence_length: 64     # Num of time steps in input sequence (4*7dias)
+  window_step: 2          # Step size between consecutive sequences
   batch_size: 32          # Num of samples per batch
   prediction_length: 1    # Num of future time steps to predict
 
 model_config:
   input_size: 1           # Num of input features
-  dropout_rate: 0.0       # Regularization technique that turns off x% of neurons in the training proccess
-  hidden_size: 64         # Num of hidden units in LSTM layers
+  hidden_size: 98         # Num of hidden units in LSTM layers
   num_layers: 2           # Num of stacked LSTM layers
   output_scale: 100.0     # Scaling factor for model outputs to handle price ranges
   shuffle_buffer: 1000     # Buffer size for dataset shuffling
 
 training_hyperparams:
   epochs: 85              # Num of training epochs
-  learning_rate: 6e-07    # Initial learning rate for optimizer
-  max_learning_rate: 1e-5 # Maximum learning rate for scheduler
-  weight_decay: 1e-5      # L2 regularization factor
-  mse_weight: 0.7
-  adam_betas: (0.9, 0.999) # control the decay rates of moving averages (momentum, uncentered variance)
+  learning_rate: 1e-6     # Initial learning rate for optimizer
+  max_learning_rate: 2e-6 # Maximum learning rate for scheduler
+  weight_decay: 5e-5      # L2 regularization factor
+  mse_weight: 0.8
+  patience: 10
+  pct_start: 0.2
+  div_factor: 10
 
+# sequence_lenght in dataset_config
 evaluate_config:
   eval_step: 28           # Num of timesteps
-  sequence_length: 28
   prediction_length: 80   # 4*20dias
-  n_timesteps: 20         # 4*5dias
-  batch_size: 32
+  n_timesteps_metrics: 20 # 4*5dias
 
 
 categorical_cols:

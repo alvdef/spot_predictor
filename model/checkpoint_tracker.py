@@ -23,7 +23,7 @@ class CheckpointTracker:
             return True
 
         try:
-            checkpoint = torch.load(best_file)
+            checkpoint = torch.load(best_file, weights_only=True)
             previous_loss = checkpoint.get("loss", float("inf"))
             return current_loss < previous_loss
         except:
@@ -43,7 +43,9 @@ class CheckpointTracker:
             return None, float("inf")
 
         try:
-            checkpoint = torch.load(best_file, map_location=self.device)
+            checkpoint = torch.load(
+                best_file, map_location=self.device, weights_only=True
+            )
 
             # Verify architecture compatibility
             current_state = model.state_dict()

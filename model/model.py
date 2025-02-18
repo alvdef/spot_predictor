@@ -52,7 +52,6 @@ class SpotLSTM(Model):
         "output_scale",
         "input_size",
         "num_layers",
-        "dropout_rate",
     ]
 
     def __init__(self, config_path: str):
@@ -65,9 +64,6 @@ class SpotLSTM(Model):
             input_size=self.config["input_size"],
             num_layers=self.config["num_layers"],
             batch_first=True,
-            dropout=(
-                self.config["dropout_rate"] if self.config["num_layers"] > 1 else 0.0
-            ),
         )
 
         self.dense = nn.Linear(self.config["hidden_size"], 1)

@@ -7,9 +7,10 @@ from utils import get_device, load_config
 
 
 class SpotDataset(Dataset):
+    REQUIRED_FIELDS = ["sequence_length", "window_step", "batch_size"]
+
     def __init__(self, df: pd.DataFrame, config_path: str = "config.yaml"):
-        required_fields = ["sequence_length", "window_step", "batch_size"]
-        self.config = load_config(config_path, "dataset_config", required_fields)
+        self.config = load_config(config_path, "dataset_config", self.REQUIRED_FIELDS)
 
         X, y = self._create_sequences(df)
         self.X = torch.tensor(X, dtype=torch.float32)

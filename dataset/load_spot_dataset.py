@@ -23,20 +23,21 @@ class LoadSpotDataset:
         logger: Logger instance for debug/error messages
     """
 
+    REQUIRED_FIELDS = [
+        "regions",
+        "data_folder",
+        "time_col",
+        "target_col",
+        "timestep_hours",
+    ]
+
     def __init__(self, config_path: str = "config.yaml", data_dir: str = "data"):
         """Initialize dataset loader.
 
         Args:
             config_path: Path to YAML config file
         """
-        required_fields = [
-            "regions",
-            "data_folder",
-            "time_col",
-            "target_col",
-            "timestep_hours",
-        ]
-        self.config = load_config(config_path, "dataset_features", required_fields)
+        self.config = load_config(config_path, "dataset_features", self.REQUIRED_FIELDS)
         self.data_dir = os.path.join(data_dir)
         self.logger = logging.getLogger(__name__)
 

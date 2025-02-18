@@ -4,10 +4,9 @@ import torch
 from tqdm import tqdm
 import os
 
-from utils.model_utils import CombinedLoss
 from .checkpoint_tracker import CheckpointTracker
 from .metrics_tracker import MetricsTracker
-from utils import get_device, load_config
+from utils import get_device, load_config, CombinedLoss
 
 
 class Training:
@@ -15,13 +14,19 @@ class Training:
         "mse_weight",
         "learning_rate",
         "weight_decay",
-        "adam_betas",
         "max_learning_rate",
         "epochs",
-        "steps_per_epoch",
+        "patience",
+        "pct_start",
+        "div_factor",
     ]
 
-    def __init__(self, model: torch.nn.Module, config_path: str = "config.yaml"):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        steps_per_epoch: int,
+        config_path: str = "config.yaml",
+    ):
         self.device = get_device()
         self.model = model
 
@@ -52,13 +57,15 @@ class Training:
             )
         )
 
+        self._convert_numeric_params()
+
         # Initialize criterion and optimizer
         self.criterion = CombinedLoss(mse_weight=self.config["mse_weight"])
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config["learning_rate"],
             weight_decay=self.config["weight_decay"],
-            betas=self.config["adam_betas"],
+            betas=(0.9, 0.999),
         )
 
         # Initialize learning rate scheduler
@@ -66,20 +73,26 @@ class Training:
             self.optimizer,
             max_lr=self.config["max_learning_rate"],
             epochs=self.config["epochs"],
-            steps_per_epoch=self.config["steps_per_epoch"],
-            pct_start=0.3,
-            div_factor=25,
+            steps_per_epoch=steps_per_epoch,
+            pct_start=self.config["pct_start"],
+            div_factor=self.config["div_factor"],
             final_div_factor=1e4,
         )
+
+        # Early stopping parameters
+        self.patience = self.config["patience"]
+        self.best_val_loss = float("inf")
+        self.epochs_no_improve = 0
 
     @property
     def history(self) -> Dict[str, List[float]]:
         return self.metrics.history
 
     def train_model(self, train_loader, val_loader=None):
-        print("\n" + "=" * 50)
-        print(f"Training for {self.config['epochs']} epochs")
-        print("=" * 50 + "\n")
+        print(
+            f"{'Epoch':^8} | {'Train Loss':^12} | {'Val Loss':^12} | {'LR':^10} | {'Grad Norm':^10} | {'Duration':^8}"
+        )
+        print("-" * 80)
 
         try:
             for epoch in range(self.config["epochs"]):
@@ -89,14 +102,27 @@ class Training:
                 current_train_loss, current_lr, grad_norm = self.train_epoch(
                     train_loader
                 )
+                epoch_duration = (datetime.now() - start_epoch).total_seconds()
 
                 # Validation phase
                 current_val_loss = None
                 if val_loader is not None:
                     current_val_loss = self.validate_model(val_loader)
 
+                    # Early stopping check
+                    if current_val_loss < self.best_val_loss:
+                        self.best_val_loss = current_val_loss
+                        self.epochs_no_improve = 0
+                    else:
+                        self.epochs_no_improve += 1
+                        if self.epochs_no_improve == self.patience:
+                            print("-" * 80)
+                            print(
+                                f"Early stopping triggered after {self.patience} epochs without improvement."
+                            )
+                            break
+
                 # Update tracking
-                epoch_duration = (datetime.now() - start_epoch).total_seconds()
                 self.metrics.update_history(
                     current_train_loss,
                     current_lr,
@@ -113,13 +139,10 @@ class Training:
                 }
                 self.checkpoints.save_if_best(model_state)
 
-                # Print progress
                 val_str = f"{current_val_loss:.4f}" if current_val_loss else "N/A"
                 print(
-                    f"Epoch {epoch+1}/{self.config['epochs']}\n"
-                    f"T: {current_train_loss:.4f}  |  V: {val_str}  |  "
-                    f"LR: {current_lr:.1e}  |  GN: {grad_norm:.1f}  |  "
-                    f"{epoch_duration:.1f}s"
+                    f"{epoch+1:^8d} | {current_train_loss:^12.4f} | {val_str:^12} | "
+                    f"{current_lr:^10.1e} | {grad_norm:^10.1f} | {epoch_duration:^8.1f}"
                 )
 
         except KeyboardInterrupt:
@@ -176,7 +199,7 @@ class Training:
 
                 # Update metrics efficiently
                 epoch_loss += loss
-                pbar.set_postfix({"loss": f"{loss.item():.6f}"})
+                pbar.set_postfix({"loss": f"{loss.item():.6f}"}, refresh=False)
 
         train_loss = (epoch_loss / len(train_loader)).item()
         current_lr = self.optimizer.param_groups[0]["lr"]
@@ -195,3 +218,14 @@ class Training:
                 total_loss += loss.item()
 
         return total_loss / len(val_loader)
+
+    def _convert_numeric_params(self):
+        self.config["mse_weight"] = float(self.config["mse_weight"])
+        self.config["learning_rate"] = float(self.config["learning_rate"])
+        self.config["weight_decay"] = float(self.config["weight_decay"])
+        self.config["max_learning_rate"] = float(self.config["max_learning_rate"])
+        self.config["pct_start"] = float(self.config["pct_start"])
+
+        self.config["epochs"] = int(self.config["epochs"])
+        self.config["patience"] = int(self.config["patience"])
+        self.config["pct_start"] = int(self.config["pct_start"])

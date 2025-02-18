@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List
 import seaborn as sns
 import pandas as pd
 import os
@@ -17,7 +17,7 @@ class ResultPlotter:
 
     def setup_style(self):
         """Configure matplotlib style for consistent plots."""
-        plt.style.use("seaborn")
+        sns.set_theme()
         sns.set_palette("husl")
 
     def plot_training_history(
@@ -109,22 +109,6 @@ class ResultPlotter:
         plt.tight_layout()
         if save:
             plt.savefig(f"{self.output_dir}/predictions.png")
-        plt.show()
-
-    def plot_learning_rate_finder(
-        self, log_lrs: List[float], losses: List[float], save: bool = True
-    ) -> None:
-        """Plot learning rate finder results."""
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        ax.plot(log_lrs, losses)
-        ax.set_xlabel("Log Learning Rate")
-        ax.set_ylabel("Loss")
-        ax.set_title("Learning Rate Finder")
-        ax.grid(True)
-
-        if save:
-            plt.savefig(f"{self.output_dir}/lr_finder.png")
         plt.show()
 
     def plot_instance_predictions(
@@ -244,4 +228,20 @@ class ResultPlotter:
         if save:
             filename = f"horizon_metrics{'_instance_'+str(instance_id) if instance_id else ''}.png"
             plt.savefig(os.path.join(self.output_dir, filename))
+        plt.show()
+
+    def plot_learning_rate_finder(
+        self, log_lrs: List[float], losses: List[float], save: bool = True
+    ) -> None:
+        """Plot learning rate finder results."""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        ax.plot(log_lrs, losses)
+        ax.set_xlabel("Log Learning Rate")
+        ax.set_ylabel("Loss")
+        ax.set_title("Learning Rate Finder")
+        ax.grid(True)
+
+        if save:
+            plt.savefig(f"{self.output_dir}/lr_finder.png")
         plt.show()
