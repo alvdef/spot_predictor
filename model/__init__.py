@@ -1,9 +1,5 @@
-from .model import SpotLSTM
-from .train import Training
-from .evaluate import Evaluate
-from .checkpoint_tracker import CheckpointTracker
-
-from utils.model_utils import find_lr
+from .base import Model
+from .gru_model import SpotGRU
 
 
-all = ["SpotLSTM", "Training", "Evaluate", "CheckpointTracker", "find_lr"]
+__all__ = ["Model", "SpotGRU"]

@@ -1,7 +1,7 @@
 dataset_features:
   data_folder: data
   start_date: 2024-04-01   # 2023-10-01
-  end_date: 2024-10-20   # 2024-12-30
+  end_date: 2025-01-06   # 2024-12-30
   regions:
     - us-east-1
   product_description: Linux/UNIX
@@ -11,19 +11,21 @@ dataset_features:
 
 dataset_config:
   sequence_length: 64     # Num of time steps in input sequence (4*7dias)
-  window_step: 2          # Step size between consecutive sequences
-  batch_size: 32          # Num of samples per batch
-  prediction_length: 1    # Num of future time steps to predict
+  window_step: 8          # Step size between consecutive sequences
+  prediction_length: 4    # Num of future time steps to predict
+  batch_size: 512          # Num of samples per batch
+  num_workers: 4
 
 model_config:
   input_size: 1           # Num of input features
   hidden_size: 98         # Num of hidden units in LSTM layers
   num_layers: 2           # Num of stacked LSTM layers
-  output_scale: 100.0     # Scaling factor for model outputs to handle price ranges
+  output_scale: 15.0     # Scaling factor for model outputs to handle price ranges
   shuffle_buffer: 1000     # Buffer size for dataset shuffling
+  prediction_length: 4
 
 training_hyperparams:
-  epochs: 85              # Num of training epochs
+  epochs: 80              # Num of training epochs
   learning_rate: 1e-6     # Initial learning rate for optimizer
   max_learning_rate: 2e-6 # Maximum learning rate for scheduler
   weight_decay: 5e-5      # L2 regularization factor
@@ -35,7 +37,7 @@ training_hyperparams:
 # sequence_lenght in dataset_config
 evaluate_config:
   eval_step: 28           # Num of timesteps
-  prediction_length: 80   # 4*20dias
+  prediction_length: 20   # 20dias
   n_timesteps_metrics: 20 # 4*5dias
 
 

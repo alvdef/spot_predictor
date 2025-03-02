@@ -23,24 +23,25 @@ class ResultPlotter:
     def plot_training_history(
         self, history: Dict[str, List[float]], save: bool = True
     ) -> None:
-        """Plot training history including losses, learning rates, and gradients."""
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
+        """Plot training history including losses, learning rates, gradients, and model metrics."""
+        fig, axes = plt.subplots(3, 2, figsize=(15, 15))
 
         # Plot losses, excluding extreme initial values
         train_loss = np.array(history["train_loss"])
-        val_loss = np.array(history["val_loss"])
+        val_loss = np.array(history.get("val_loss", []))
 
         # Calculate reasonable loss range (excluding outliers)
         loss_threshold = np.percentile(train_loss[~np.isnan(train_loss)], 95)
         train_loss[train_loss > loss_threshold] = loss_threshold
 
-        ax1.plot(train_loss, label="Training Loss")
-        if not all(x is None for x in val_loss):
-            ax1.plot(val_loss, label="Validation Loss")
-        ax1.set_xlabel("Epoch")
-        ax1.set_ylabel("Loss")
-        ax1.grid(True)
-        ax1.legend()
+        axes[0, 0].plot(train_loss, label="Training Loss")
+        if len(val_loss) > 0 and not all(x is None for x in val_loss):
+            axes[0, 0].plot(val_loss, label="Validation Loss")
+        axes[0, 0].set_xlabel("Epoch")
+        axes[0, 0].set_ylabel("Loss")
+        axes[0, 0].grid(True)
+        axes[0, 0].legend()
+        axes[0, 0].set_title("Loss Curves")
 
         # Plot learning rates with better y-axis range
         lr_data = np.array(history["learning_rates"])
@@ -48,13 +49,14 @@ class ResultPlotter:
         if len(valid_lr) > 0:
             min_lr = max(np.min(valid_lr), 1e-10)
             max_lr = np.max(valid_lr)
-            ax2.plot(lr_data, label="Learning Rate")
-            ax2.set_xlabel("Step")
-            ax2.set_ylabel("Learning Rate")
-            ax2.set_yscale("log")
-            ax2.set_ylim(min_lr / 10, max_lr * 10)
-            ax2.grid(True)
-            ax2.legend()
+            axes[0, 1].plot(lr_data, label="Learning Rate")
+            axes[0, 1].set_xlabel("Step")
+            axes[0, 1].set_ylabel("Learning Rate")
+            axes[0, 1].set_yscale("log")
+            axes[0, 1].set_ylim(min_lr / 10, max_lr * 10)
+            axes[0, 1].grid(True)
+            axes[0, 1].legend()
+            axes[0, 1].set_title("Learning Rate")
 
         # Plot gradient norms with outlier removal
         grad_norms = np.array(history["grad_norms"])
@@ -62,11 +64,54 @@ class ResultPlotter:
         if len(valid_norms) > 0:
             norm_threshold = np.percentile(valid_norms, 95)
             grad_norms[grad_norms > norm_threshold] = norm_threshold
-            ax3.plot(grad_norms, label="Gradient Norm")
-            ax3.set_xlabel("Step")
-            ax3.set_ylabel("Gradient Norm")
-            ax3.grid(True)
-            ax3.legend()
+            axes[1, 0].plot(grad_norms, label="Gradient Norm")
+            axes[1, 0].set_xlabel("Step")
+            axes[1, 0].set_ylabel("Gradient Norm")
+            axes[1, 0].grid(True)
+            axes[1, 0].legend()
+            axes[1, 0].set_title("Gradient Norms")
+
+        # Plot MSE if available
+        if "mse" in history and len(history["mse"]) > 0:
+            mse = np.array(history["mse"])
+            axes[1, 1].plot(mse, label="Train MSE")
+            if "val_mse" in history and len(history["val_mse"]) > 0:
+                val_mse = np.array(history["val_mse"])
+                axes[1, 1].plot(val_mse, label="Validation MSE")
+            axes[1, 1].set_xlabel("Epoch")
+            axes[1, 1].set_ylabel("MSE")
+            axes[1, 1].grid(True)
+            axes[1, 1].legend()
+            axes[1, 1].set_title("Mean Squared Error")
+
+        # Plot MAPE if available
+        if "mape" in history and len(history["mape"]) > 0:
+            mape = np.array(history["mape"])
+            axes[2, 0].plot(mape, label="Train MAPE")
+            if "val_mape" in history and len(history["val_mape"]) > 0:
+                val_mape = np.array(history["val_mape"])
+                axes[2, 0].plot(val_mape, label="Validation MAPE")
+            axes[2, 0].set_xlabel("Epoch")
+            axes[2, 0].set_ylabel("MAPE (%)")
+            axes[2, 0].grid(True)
+            axes[2, 0].legend()
+            axes[2, 0].set_title("Mean Absolute Percentage Error")
+
+        # Plot direction accuracy if available
+        if "direction_accuracy" in history and len(history["direction_accuracy"]) > 0:
+            dir_acc = np.array(history["direction_accuracy"])
+            axes[2, 1].plot(dir_acc, label="Train Direction Accuracy")
+            if (
+                "val_direction_accuracy" in history
+                and len(history["val_direction_accuracy"]) > 0
+            ):
+                val_dir_acc = np.array(history["val_direction_accuracy"])
+                axes[2, 1].plot(val_dir_acc, label="Validation Direction Accuracy")
+            axes[2, 1].set_xlabel("Epoch")
+            axes[2, 1].set_ylabel("Direction Accuracy")
+            axes[2, 1].grid(True)
+            axes[2, 1].legend()
+            axes[2, 1].set_title("Price Direction Prediction Accuracy")
 
         plt.tight_layout()
         if save:

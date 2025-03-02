@@ -41,7 +41,6 @@ class LoadSpotDataset:
         self.data_dir = os.path.join(data_dir)
         self.logger = logging.getLogger(__name__)
 
-        # Initialize S3 client
         try:
             self.s3 = boto3.client("s3")
         except Exception as e:

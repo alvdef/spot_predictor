@@ -1,8 +1,16 @@
+from typing import Dict, Optional, Tuple
 import os
 import torch
-from typing import Dict, Optional, Tuple
 
-from utils import get_device
+
+def get_device() -> torch.device:
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    return device
 
 
 class CheckpointTracker:
@@ -47,7 +55,6 @@ class CheckpointTracker:
                 best_file, map_location=self.device, weights_only=True
             )
 
-            # Verify architecture compatibility
             current_state = model.state_dict()
             checkpoint_state = checkpoint["model_state_dict"]
 
