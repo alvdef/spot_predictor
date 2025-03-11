@@ -43,46 +43,78 @@ class Normalizer:
         self.params[instance_id] = {"mean": mean, "std": std}
         return self
 
-    def normalize(self, values: torch.Tensor, instance_id: int) -> torch.Tensor:
-        """Normalize tensor values for a given instance."""
+    def normalize(self, values: torch.Tensor, instance_ids: List[int]) -> torch.Tensor:
+        """
+        Normalize tensor values for given instance IDs, normalizing only the price feature (index 0).
+
+        Args:
+            values: Tensor to normalize
+            instance_ids: List of instance IDs
+
+        Returns:
+            Normalized tensor with only the price feature normalized
+        """
         if not isinstance(values, torch.Tensor):
             raise TypeError("Values must be a torch.Tensor")
 
-        if instance_id not in self.params:
-            raise ValueError(f"No parameters for instance {instance_id}")
+        if not isinstance(instance_ids, list):
+            raise TypeError("instance_ids must be a list of integers")
 
-        params = self.params[instance_id]
-        result = (values - params["mean"]) / params["std"]
-
-        if self.device is not None:
-            result = result.to(self.device)
-
-        return result
-
-    def denormalize(self, values: torch.Tensor, instance_id: int) -> torch.Tensor:
-        """Denormalize tensor values for a given instance."""
-        if not isinstance(values, torch.Tensor):
-            raise TypeError("Values must be a torch.Tensor")
-
-        if instance_id not in self.params:
-            raise ValueError(f"No parameters for instance {instance_id}")
-
-        params = self.params[instance_id]
-        result = values * params["std"] + params["mean"]
-
-        if self.device is not None:
-            result = result.to(self.device)
-
-        return result
-
-    def batch_normalize(
-        self, values: torch.Tensor, instance_ids: List[int]
-    ) -> torch.Tensor:
-        """Normalize a batch of values for multiple instances more efficiently."""
         if len(values) != len(instance_ids):
             raise ValueError("Number of values must match number of instance IDs")
 
-        # Create parameter tensors for vectorized operations
+        # Validate instance IDs
+        for id in instance_ids:
+            if id not in self.params:
+                raise ValueError(f"No parameters for instance {id}")
+
+        return self._apply_normalization(values, instance_ids, normalize=True)
+
+    def denormalize(
+        self, values: torch.Tensor, instance_ids: List[int]
+    ) -> torch.Tensor:
+        """
+        Denormalize tensor values for given instance IDs.
+        For 3D tensors, only denormalizes the price feature (index 0).
+        For 1D/2D tensors, denormalizes all values (assumes they are prices).
+
+        Args:
+            values: Tensor to denormalize
+            instance_ids: List of instance IDs
+
+        Returns:
+            Denormalized tensor
+        """
+        if not isinstance(values, torch.Tensor):
+            raise TypeError("Values must be a torch.Tensor")
+
+        if not isinstance(instance_ids, list):
+            raise TypeError("instance_ids must be a list of integers")
+
+        if len(values) != len(instance_ids):
+            raise ValueError("Number of values must match number of instance IDs")
+
+        for id in instance_ids:
+            if id not in self.params:
+                raise ValueError(f"No parameters for instance {id}")
+
+        return self._apply_normalization(values, instance_ids, normalize=False)
+
+    def _apply_normalization(
+        self, values: torch.Tensor, instance_ids: List[int], normalize: bool
+    ) -> torch.Tensor:
+        """
+        Apply normalization or denormalization to values.
+
+        Args:
+            values: Tensor to normalize/denormalize
+            instance_ids: List of instance IDs
+            normalize: If True, normalize; if False, denormalize
+
+        Returns:
+            Processed tensor
+        """
+        # Get normalization parameters for all instances in one go
         means = torch.tensor(
             [self.params[id]["mean"] for id in instance_ids], device=values.device
         )
@@ -90,27 +122,31 @@ class Normalizer:
             [self.params[id]["std"] for id in instance_ids], device=values.device
         )
 
-        # Reshape for broadcasting
-        if len(values.shape) > 1:
-            means = means.view(-1, *([1] * (len(values.shape) - 1)))
-            stds = stds.view(-1, *([1] * (len(values.shape) - 1)))
+        # Store original shape for reshaping later
+        original_shape = values.shape
+        result = values.clone()
 
-        # Vectorized normalization
-        return (values - means) / stds
+        # Reshape parameters to match input dimensions for proper broadcasting
+        if len(original_shape) == 3:  # [batch_size, seq_len, features]
+            # Reshape means and stds to [batch_size, 1, 1] for proper broadcasting
+            means = means.view(-1, 1, 1)
+            stds = stds.view(-1, 1, 1)
+        elif len(original_shape) == 2:  # [batch_size, seq_len]
+            # Reshape means and stds to [batch_size, 1] for proper broadcasting
+            means = means.view(-1, 1)
+            stds = stds.view(-1, 1)
 
-    def batch_denormalize(
-        self, values: torch.Tensor, instance_ids: List[int]
-    ) -> torch.Tensor:
-        """Denormalize a batch of values for multiple instances."""
-        if len(values) != len(instance_ids):
-            raise ValueError("Number of values must match number of instance IDs")
+        # Apply normalization/denormalization
+        if normalize:
+            result = (values - means) / stds
+        else:
+            result = values * stds + means
 
-        return torch.stack(
-            [
-                self.denormalize(values[i], instance_id)
-                for i, instance_id in enumerate(instance_ids)
-            ]
-        )
+        # Ensure output has the same shape as input
+        if result.shape != original_shape:
+            result = result.view(original_shape)
+
+        return result
 
     def save(self, filepath: str) -> None:
         """
@@ -214,3 +250,21 @@ class Normalizer:
                 "avg": sum(stds) / len(stds),
             },
         }
+
+    def get_params(self) -> Dict[str, Any]:
+        """
+        Get all normalization parameters.
+
+        Returns:
+            Dictionary with all instance parameters
+        """
+        return {str(k): v for k, v in self.params.items()}
+
+    def set_params(self, params: Dict[str, Any]) -> None:
+        """
+        Set normalization parameters.
+
+        Args:
+            params: Dictionary with parameters
+        """
+        self.params = {int(k): v for k, v in params.items()}

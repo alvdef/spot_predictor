@@ -6,15 +6,7 @@ from .base import LossFunction
 
 
 class MultiStepForecastLoss(LossFunction):
-    """
-    Combined loss function for multi-step forecasting that includes:
-    - MSE for magnitude accuracy
-    - MAPE for percentage error
-    - Direction accuracy (binary correctness of price movement direction)
-    """
-
-    # def __init__(self, mse_weight=0.7, mape_weight=0.15, direction_weight=0.15):
-    def __init__(self, mse_weight=0.4, mape_weight=0.2, direction_weight=0.4):
+    def __init__(self, mse_weight=1.0, mape_weight=0.0, direction_weight=0.0):
         super().__init__()
         self.mse_weight = mse_weight
         self.mape_weight = mape_weight

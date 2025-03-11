@@ -31,14 +31,14 @@ class LoadSpotDataset:
         "timestep_hours",
     ]
 
-    def __init__(self, config_path: str = "config.yaml", data_dir: str = "data"):
+    def __init__(self, config_path: str):
         """Initialize dataset loader.
 
         Args:
             config_path: Path to YAML config file
         """
         self.config = load_config(config_path, "dataset_features", self.REQUIRED_FIELDS)
-        self.data_dir = os.path.join(data_dir)
+        self.data_dir = os.path.join("data")
         self.logger = logging.getLogger(__name__)
 
         try:
@@ -85,6 +85,10 @@ class LoadSpotDataset:
             # Combine data
             prices_df = pd.concat(prices_dfs, ignore_index=True)
             instance_info_df = pd.concat(instance_info_dfs)
+
+            # Filter prices_df to only include instances from instance_info_df
+            valid_instance_ids = instance_info_df.index.tolist()
+            prices_df = prices_df[prices_df["id_instance"].isin(valid_instance_ids)]
 
             # Validate
             self._validate_loaded_data(prices_df, instance_info_df)
@@ -138,6 +142,35 @@ class LoadSpotDataset:
             instance_info_df["architectures"] = instance_info_df["architectures"].apply(
                 lambda x: ast.literal_eval(x) if isinstance(x, str) else x
             )
+
+            # Apply filtering based on configuration
+            if "instance_filters" in self.config:
+                filters = self.config.get("instance_filters", {})
+
+                if "instance_family" in filters and filters["instance_family"]:
+                    instance_info_df = instance_info_df[
+                        instance_info_df["instance_family"].isin(
+                            filters["instance_family"]
+                        )
+                    ]
+
+                if "size" in filters and filters["size"]:
+                    instance_info_df = instance_info_df[
+                        instance_info_df["size"].isin(filters["size"])
+                    ]
+
+                if "product_description" in filters and filters["product_description"]:
+                    product_descriptions = filters["product_description"]
+                    instance_info_df = instance_info_df[
+                        instance_info_df["product_description"].isin(
+                            product_descriptions
+                        )
+                    ]
+
+                if "instance_type" in filters and filters["instance_type"]:
+                    instance_info_df = instance_info_df[
+                        instance_info_df["instance_type"].isin(filters["instance_type"])
+                    ]
 
             return instance_info_df
         except Exception as e:

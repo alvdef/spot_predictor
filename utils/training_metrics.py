@@ -172,49 +172,48 @@ class MetricsTracker:
         display_metrics = {}
         for key, value in metrics.items():
             display_metrics[key] = (
-                f"{value.item() if isinstance(value, torch.Tensor) else value:.4f}"
+                f"{value.item() if isinstance(value, torch.Tensor) else value:.6f}"
             )
 
-        display_metrics["loss"] = f"{loss.item():.4f}"
+        display_metrics["loss"] = f"{loss.item():.6f}"
         pbar.set_postfix(display_metrics, refresh=False)  # Avoid unnecessary refreshes
 
     def print_header(self) -> None:
         """Prints the header row for training progress display."""
         print(
-            f"{'Epoch':^8} | {'Train Loss':^12} | {'Val Loss':^12} | {'MSE':^8} | {'MAPE':^8} | "
-            f"{'Dir Acc':^8} | {'LR':^10} | {'Grad Norm':^10} | {'Duration':^8}"
+            f"{'Epoch':^8} | {'Train Loss':^14} | {'Val Loss':^14} | {'MSE':^10} | {'MAPE':^10} | "
+            f"{'Dir Acc':^10} | {'LR':^10} | {'Grad Norm':^10} | {'Duration':^8}"
         )
-        print("-" * 115)
+        print("-" * 120)
 
     def print_epoch_stats(self) -> None:
         """
         Prints statistics for the current epoch using stored state.
         Uses 'N/A' for missing metrics to maintain consistent output formatting.
         """
-        val_str = f"{self._val_loss:.4f}" if self._val_loss is not None else "N/A"
+        val_str = f"{self._val_loss:.6f}" if self._val_loss is not None else "N/A"
 
         mse_str = (
-            f"{self._train_metrics.get('mse', 0):.2f}"
+            f"{self._train_metrics.get('mse', 0):.6f}"
             if "mse" in self._train_metrics
             else "N/A"
         )
         mape_str = (
-            f"{self._train_metrics.get('mape', 0):.2f}"
+            f"{self._train_metrics.get('mape', 0):.6f}"
             if "mape" in self._train_metrics
             else "N/A"
         )
         dir_acc_str = (
-            f"{self._train_metrics.get('direction', 0):.2f}"
+            f"{self._train_metrics.get('direction', 0):.6f}"
             if "direction" in self._train_metrics
             else "N/A"
         )
 
         # Using end='' prevents double newlines when called in loops
         print(
-            f"{self._epoch:^8d} | {self._train_loss:^12.4f} | {val_str:^12} | "
-            f"{mse_str:^8} | {mape_str:^8} | {dir_acc_str:^8} | "
+            f"{self._epoch:^8d} | {self._train_loss:^14.6f} | {val_str:^14} | "
+            f"{mse_str:^10} | {mape_str:^10} | {dir_acc_str:^10} | "
             f"{self._learning_rate:^10.1e} | {self._grad_norm:^10.1f} | {self._epoch_duration:^8.1f}",
-            end="",
         )
 
         # Record MSE if present - moved from print function to ensure data is captured

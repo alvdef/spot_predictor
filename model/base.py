@@ -1,10 +1,11 @@
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, Union, List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
-from utils import get_device
+from dataset import Normalizer
+from utils import get_device, load_config
 
 
 class Model(nn.Module, ABC):
@@ -34,11 +35,19 @@ class Model(nn.Module, ABC):
             Load model weights and normalizer parameters.
     """
 
-    def __init__(self):
+    REQUIRED_FIELDS: List[str] = []
+
+    def __init__(self, work_dir: str):
         super().__init__()
         self.device = get_device()
-        self.normalizer = None
-        self.config = {}
+        self.normalizer: Optional[Normalizer] = None
+        self.work_dir = work_dir
+
+        self.config = load_config(
+            f"{work_dir}/config.yaml", "model_config", self.REQUIRED_FIELDS
+        )
+        self._build_model(self.config)
+        self.initialized = True
 
     def attach_normalizer(self, normalizer) -> None:
         """
@@ -60,58 +69,72 @@ class Model(nn.Module, ABC):
         pass
 
     @abstractmethod
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+    ) -> torch.Tensor:
         """
         Forward pass through the model.
 
         Args:
-            x: Input tensor
+            x: Either:
+               - A sequence tensor
+               - A tuple (sequence, features) where:
+                 sequence: Input tensor of shape (batch_size, seq_len, input_size)
+                 features: Additional features tensor of shape (batch_size, feature_size)
 
         Returns:
             Output tensor
         """
         pass
 
+    @torch.no_grad()
     def predict(
-        self, x: torch.Tensor, instance_ids: Optional[Union[int, List[int]]] = None
+        self,
+        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+        instance_ids: Optional[List[int]] = None,
     ) -> torch.Tensor:
         """
         Make predictions with a single forward pass (no recursion).
 
         Args:
-            x: Input tensor
-            instance_ids: Instance ID(s) for normalization, can be a single ID or list of IDs for batch
+            x: Either:
+               - A sequence tensor
+               - A tuple (sequence, features) where:
+                 sequence: Input tensor
+                 features: Additional features tensor
+            instance_ids: Instance ID(s) for normalization
 
         Returns:
             Predictions tensor
         """
         self.eval()
-        with torch.no_grad():
-            # Apply normalization if available
+        # Handle sequence and features separately for normalization
+        if isinstance(x, tuple):
+            sequence, features = x
+            if self.normalizer is not None and instance_ids is not None:
+                sequence = self.normalizer.normalize(sequence, instance_ids)
+            x = (sequence, features)
+        else:
             if self.normalizer is not None and instance_ids is not None:
                 x = self.normalizer.normalize(x, instance_ids)
 
-            predictions = self.forward(x)
+        predictions = self.forward(x)
 
-            # Apply denormalization if available
-            if self.normalizer is not None and instance_ids is not None:
-                predictions = self.normalizer.denormalize(predictions, instance_ids)
+        if self.normalizer is not None and instance_ids is not None:
+            predictions = self.normalizer.denormalize(predictions, instance_ids)
 
-            return predictions
+        return predictions
 
     @torch.no_grad()
     def forecast(
         self,
         sequence: torch.Tensor,
         n_steps: int,
-        instance_ids: Optional[Union[int, List[int]]] = None,
+        instance_ids: Optional[List[int]] = None,
+        features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Generate recursive predictions for n_steps ahead.
-
-        This is a unified approach for all model types, handling
-        multi-step prediction by recursively feeding predictions
-        back as inputs for future steps.
+        Generate recursive predictions for n_steps ahead by using predict.
 
         Args:
             sequence: Input sequence tensor with shape either:
@@ -121,6 +144,7 @@ class Model(nn.Module, ABC):
             instance_ids: Instance ID(s) for normalization, can be:
                           - A single integer ID (applied to all sequences)
                           - A list of integer IDs (one per sequence)
+            features: Additional features tensor of shape (batch_size, feature_size)
 
         Returns:
             Predictions tensor of shape (batch_size, n_steps)
@@ -130,36 +154,21 @@ class Model(nn.Module, ABC):
         if not isinstance(sequence, torch.Tensor):
             raise TypeError("sequence must be a torch.Tensor")
 
-        if len(sequence.shape) == 1:  # Single sequence without batch dimension
-            sequence = sequence.unsqueeze(0)  # Add batch dimension
-
-        sequence = sequence.to(self.device)
-
-        # Handle instance_ids preparation
-        if isinstance(instance_ids, int) and sequence.shape[0] > 1:
-            # If we have a single instance_id but multiple sequences, duplicate it
-            instance_ids = [instance_ids] * sequence.shape[0]
-        elif instance_ids is not None and not isinstance(instance_ids, (int, list)):
+        if instance_ids is not None and not isinstance(instance_ids, list):
             raise TypeError(
                 "instance_ids must be either an int, a list of ints, or None"
             )
 
-        # Check if list of instance_ids matches batch size
         if isinstance(instance_ids, list) and len(instance_ids) != sequence.shape[0]:
             raise ValueError(
                 f"Length of instance_ids list ({len(instance_ids)}) must match batch size ({sequence.shape[0]})"
             )
 
-        # Apply normalization if available
-        if self.normalizer is not None and instance_ids is not None:
-            sequence = self.normalizer.normalize(sequence, instance_ids)
-
-        if len(sequence.shape) == 2:
-            sequence = sequence.unsqueeze(-1)  # Add feature dimension if missing
+        if len(sequence.shape) == 1:  # Single sequence without batch dimension
+            sequence = sequence.unsqueeze(0)  # Add batch dimension
 
         batch_size = sequence.shape[0]
         seq_len = sequence.shape[1]
-
         prediction_length = self.config.get("prediction_length", 1)
 
         predictions = torch.zeros((batch_size, n_steps), device=self.device)
@@ -167,7 +176,14 @@ class Model(nn.Module, ABC):
 
         steps_done = 0
         while steps_done < n_steps:
-            output = self.forward(current_sequence)
+            # Prepare input for predict method
+            model_input = (
+                (current_sequence, features)
+                if features is not None
+                else current_sequence
+            )
+
+            output = self.predict(model_input, instance_ids)
 
             steps_to_use = min(prediction_length, n_steps - steps_done)
             predictions[:, steps_done : steps_done + steps_to_use] = output[
@@ -188,13 +204,9 @@ class Model(nn.Module, ABC):
                         [current_sequence[:, steps_to_use:, :], new_values], dim=1
                     )[:, -seq_len:, :]
 
-        # Denormalize predictions if needed
-        if self.normalizer is not None and instance_ids is not None:
-            predictions = self.normalizer.denormalize(predictions, instance_ids)
-
         return predictions
 
-    def save(self, path: str) -> None:
+    def save(self) -> None:
         """
         Save model weights and normalizer parameters.
 
@@ -206,17 +218,18 @@ class Model(nn.Module, ABC):
         if self.normalizer is not None:
             save_dict["normalizer"] = self.normalizer.get_params()
 
+        path = self.work_dir + "/model.pth"
         torch.save(save_dict, path)
 
-    def load(self, path: str) -> None:
+    def load(self) -> None:
         """
         Load model weights and normalizer parameters.
 
         Args:
             path: Path to load the model from
         """
+        path = self.work_dir + "/model.pth"
         checkpoint = torch.load(path, map_location=self.device)
-
         if "config" in checkpoint:
             self.config = checkpoint["config"]
             if not hasattr(self, "initialized") or not self.initialized:
@@ -224,5 +237,6 @@ class Model(nn.Module, ABC):
 
         self.load_state_dict(checkpoint["model_state_dict"])
 
-        if "normalizer" in checkpoint and self.normalizer is not None:
+        if "normalizer" in checkpoint:
+            self.normalizer = Normalizer(self.device)
             self.normalizer.set_params(checkpoint["normalizer"])

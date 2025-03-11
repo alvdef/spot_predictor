@@ -10,9 +10,9 @@ from collections import defaultdict
 class ResultPlotter:
     """Plot training results and model predictions."""
 
-    def __init__(self, output_dir: str = "output"):
+    def __init__(self, work_dir: str = "output"):
         """Initialize plotter with output directory."""
-        self.output_dir = output_dir
+        self.output_dir = work_dir + "/plots"
         self.setup_style()
 
     def setup_style(self):

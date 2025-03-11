@@ -27,16 +27,15 @@ class Training:
     def __init__(
         self,
         model: Model,
-        config_path: str = "config.yaml",
+        work_dir: str,
     ):
         """Initialize training process for the model."""
         self.device = get_device()
         self.model = model
-        self.output_dir = "output"
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.work_dir = work_dir
 
-        self.metrics = MetricsTracker(self.output_dir)
-        self.checkpoints = CheckpointTracker()
+        self.metrics = MetricsTracker(work_dir + "/training")
+        self.checkpoints = CheckpointTracker(work_dir + "/training")
 
         # Try to load previous checkpoint to continue training
         prev_config, prev_best_loss = self.checkpoints.load(self.model)
@@ -46,7 +45,9 @@ class Training:
             print("Using previous configuration and model for training.")
         else:
             self.config = load_config(
-                config_path, "training_hyperparams", self.REQUIRED_CONFIG_FIELDS
+                f"{work_dir}/config.yaml",
+                "training_hyperparams",
+                self.REQUIRED_CONFIG_FIELDS,
             )
 
         self._convert_numeric_params()
@@ -54,11 +55,7 @@ class Training:
         self.metrics.early_stopping_patience = self.config["patience"]
 
         # Initialize loss function with configurable weights
-        self.criterion = MultiStepForecastLoss(
-            mse_weight=self.config.get("mse_weight", 0.4),
-            mape_weight=self.config.get("mape_weight", 0.2),
-            direction_weight=self.config.get("direction_weight", 0.4),
-        )
+        self.criterion = MultiStepForecastLoss()
 
         # AdamW optimizer tends to work better than Adam for time series models
         self.optimizer = torch.optim.AdamW(
@@ -72,36 +69,26 @@ class Training:
         """
         Create and fit normalizer using all available data for each instance.
         Uses the full sequence data to compute more stable normalization parameters.
+
+        The normalizer is fitted per-instance but will be used with lists of instance IDs
+        during training and inference to maximize batch processing efficiency.
         """
         print("Preparing normalizer for the model...")
 
         normalizer = Normalizer(device=self.device)
 
-        all_data = dataset.get_sequences()
-        instance_ids = all_data["instance_ids"]
-        sequences = all_data["sequences"]  # Already on GPU as a single tensor
-
-        # Calculate normalization parameters per instance using unique instance IDs
-        unique_ids = list(set(instance_ids))
+        unique_ids = list(set(dataset.get_sequences()["instance_ids"]))
         for instance_id in unique_ids:
-            # Get all sequences for this instance
-            instance_mask = [
-                i for i, iid in enumerate(instance_ids) if iid == instance_id
-            ]
-            instance_data = sequences[instance_mask]  # Shape: [n_sequences, seq_len, 1]
+            # Use the instance_id parameter of get_sequences to get data for a specific instance
+            instance_data = dataset.get_sequences(instance_id=instance_id)
 
-            # Remove feature dimension and combine all sequences
-            instance_values = instance_data.squeeze(-1).reshape(-1)  # Flatten to 1D
-
-            # Fit normalizer with all values from this instance
-            normalizer.fit(instance_id, instance_values)
+            price_values = instance_data["sequences"].reshape(-1)
+            normalizer.fit(instance_id, price_values)
 
         stats = normalizer.get_params_summary()
         print(f"Normalizer prepared for {stats['count']} instances")
 
-        # Attach normalizer to model
         self.model.attach_normalizer(normalizer)
-        normalizer.save(os.path.join(self.output_dir, "normalizer.json"))
 
     @property
     def history(self) -> Dict[str, List[float]]:

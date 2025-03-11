@@ -1,20 +1,29 @@
+model_name: useast1-c
+  
 dataset_features:
   data_folder: data
-  start_date: 2024-04-01   # 2023-10-01
-  end_date: 2025-01-06   # 2024-12-30
-  regions:
-    - us-east-1
-  product_description: Linux/UNIX
+  start_date: 2024-04-01  # 2023-10-01
+  end_date: 2025-03-01    # 2024-12-30
+  regions: ['us-east-1']  # ['ap-northeast-1','ap-northeast-2','ap-northeast-3','ap-south-1', 'ap-southeast-1','ap-southeast-2','ca-central-1','eu-central-1','eu-north-1','eu-west-1','eu-west-2','eu-west-3','sa-east-1','us-east-1','us-east-2','us-west-1','us-west-2']
+  instance_filters:
+    product_description: ['Linux/UNIX']
+    instance_type: ['c5.large']
+    # av_zone: []
+    # instance_family: ['c']
+    # size: ['nano', 'micro', 'small', 'medium', 'large', 'xlarge', '2xlarge']
+  
   target_col: spot_price
   time_col: price_timestamp
   timestep_hours: 4
+  time_features:
+    - dayofweek
+    - dayofmonth
 
 dataset_config:
   sequence_length: 64     # Num of time steps in input sequence (4*7dias)
   window_step: 8          # Step size between consecutive sequences
   prediction_length: 4    # Num of future time steps to predict
-  batch_size: 512          # Num of samples per batch
-  num_workers: 4
+  batch_size: 16          # Num of samples per batch
 
 model_config:
   input_size: 1           # Num of input features
@@ -23,6 +32,7 @@ model_config:
   output_scale: 15.0     # Scaling factor for model outputs to handle price ranges
   shuffle_buffer: 1000     # Buffer size for dataset shuffling
   prediction_length: 4
+  feature_size: 0         # Size of additional feature vector (set to 0 if not using features)
 
 training_hyperparams:
   epochs: 80              # Num of training epochs
@@ -36,23 +46,6 @@ training_hyperparams:
 
 # sequence_lenght in dataset_config
 evaluate_config:
-  eval_step: 28           # Num of timesteps
   prediction_length: 20   # 20dias
   n_timesteps_metrics: 20 # 4*5dias
-
-
-categorical_cols:
-  - av_zone
-  - instance_family
-  - generation
-  - size
-
-multicategorical_cols:
-  - modifiers
-  - architectures
-
-numerical_cols:
-  - dow_sin
-  - dow_cos
-  - dom_sin
-  - dom_cos
+  batch_size: 32          # Batch size for evaluation

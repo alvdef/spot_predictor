@@ -34,3 +34,8 @@ def load_config(config_path: str, config_key: str, required_fields: list[str]) -
             raise ValueError(f"Missing required config field: {field}")
 
     return config
+
+
+def get_name():
+    with open("config.yaml", "r") as config_file:
+        return yaml.safe_load(config_file)["model_name"]

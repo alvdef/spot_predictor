@@ -3,37 +3,42 @@ import os
 import json
 import torch
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
 
-from dataset import SpotDataset
 from utils import get_device, load_config
 from model import Model
 
 
 class Evaluate:
-    REQUIRED_FIELDS = [
-        "eval_step",
+    FIELDS_EVALUATE = [
         "prediction_length",
         "n_timesteps_metrics",
         "batch_size",
     ]
+    FIELDS_DATASET = ["sequence_length", "window_step", "prediction_length"]
 
-    def __init__(
-        self, model: Model, config_path: str = "config.yaml", output_dir: str = "output"
-    ):
-        """Initialize evaluation process for the model."""
+    def __init__(self, model: Model, work_dir: str):
         self.model = model
         self.device = get_device()
         self.model.to(self.device)
-        self.model.eval()  # Always evaluate in eval mode
+        self.model.eval()
 
-        self.config = load_config(config_path, "evaluate_config", self.REQUIRED_FIELDS)
-        self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
+        self.config = load_config(
+            f"{work_dir}/config.yaml", "evaluate_config", self.FIELDS_EVALUATE
+        )
+        self.dataset_config = load_config(
+            f"{work_dir}/config.yaml", "dataset_config", self.FIELDS_DATASET
+        )
+        self.output_dir = f"{work_dir}/evaluation"
+        os.makedirs(self.output_dir, exist_ok=True)
 
         # Batch size for efficient processing
         self.batch_size = self.config.get("batch_size", 32)
+        self.eval_prediction_length = (
+            self.config["prediction_length"] * self.dataset_config["prediction_length"]
+        )
 
         # Storage for results and metrics
         self.segmented_metrics: DefaultDict[int, List[Dict]] = defaultdict(list)
@@ -59,41 +64,107 @@ class Evaluate:
         """Return prediction results for a specific instance."""
         return self.prediction_results[id_instance]
 
+    def _create_sequences(
+        self, instance_df: pd.DataFrame
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Create sequences for evaluation using rolling window approach.
+
+        Args:
+            instance_df: DataFrame for a single instance
+
+        Returns:
+            Tuple of (input_sequences, target_sequences) as tensors
+        """
+        sequence_length = self.dataset_config["sequence_length"]
+        window_step = self.dataset_config["window_step"]
+
+        values = instance_df["spot_price"].values.astype(np.float32)
+        total_length = len(values)
+
+        # Calculate how many sequences we can create
+        required_length = sequence_length + self.eval_prediction_length
+        if total_length < required_length:
+            return None, None  # type: ignore
+
+        n_sequences = (total_length - required_length) // window_step + 1
+
+        # Create sequences and targets
+        input_sequences = []
+        target_sequences = []
+
+        for i in range(n_sequences):
+            start_idx = i * window_step
+            end_input_idx = start_idx + sequence_length
+            end_target_idx = end_input_idx + self.eval_prediction_length
+
+            if end_target_idx > total_length:
+                break
+
+            input_seq = values[start_idx:end_input_idx]
+            target_seq = values[end_input_idx:end_target_idx]
+
+            input_sequences.append(input_seq)
+            target_sequences.append(target_seq)
+
+        if not input_sequences:
+            return None, None  # type: ignore
+
+        # Convert to tensors
+        input_sequences = np.array(input_sequences)
+        target_sequences = np.array(target_sequences)
+        input_tensor = torch.tensor(
+            input_sequences, dtype=torch.float32, device=self.device
+        )
+        target_tensor = torch.tensor(
+            target_sequences, dtype=torch.float32, device=self.device
+        )
+
+        # Add feature dimension to input
+        input_tensor = input_tensor.unsqueeze(-1)
+
+        return input_tensor, target_tensor
+
     def evaluate_instance(
-        self, instance_id: int, dataset: SpotDataset
+        self, instance_id: int, test_df: pd.DataFrame
     ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
-        Evaluate a single instance using batch processing, keeping everything on GPU until final result.
+        Evaluate a single instance using the test DataFrame directly.
 
-        Only converts to CPU at the last moment when storing results.
-        Processing in batches is critical for large datasets to:
-        1. Reduce memory usage
-        2. Better utilize GPU parallelism
-        3. Avoid potential out-of-memory errors
+        Args:
+            instance_id: ID of the instance to evaluate
+            test_df: DataFrame containing test data
+
+        Returns:
+            List of (target, prediction) tensor pairs
         """
         try:
-            # Get all sequences for this instance (already on GPU)
-            instance_data = dataset.get_sequences(instance_id)
-            if not instance_data or len(instance_data.get("sequences", [])) == 0:
+            instance_df = test_df[test_df["id_instance"] == instance_id]
+
+            if len(instance_df) == 0:
+                print(f"Warning: No data found for instance {instance_id}")
                 return []
 
-            # Keep as tensors on GPU
-            sequences = instance_data["sequences"]
-            targets = instance_data["targets"]
+            input_sequences, target_sequences = self._create_sequences(instance_df)
 
-            # Process in batches for memory efficiency
-            num_sequences = sequences.shape[0]
+            if input_sequences is None or target_sequences is None:
+                print(
+                    f"Warning: Insufficient data for instance {instance_id} to create sequences"
+                )
+                return []
+
             all_predictions = []
+            num_sequences = input_sequences.shape[0]
 
-            # Process sequences in batches without unnecessary conversions
             for i in range(0, num_sequences, self.batch_size):
                 batch_end = min(i + self.batch_size, num_sequences)
-                batch_sequences = sequences[i:batch_end]  # Already on GPU
+                batch_inputs = input_sequences[i:batch_end]
 
-                # Get predictions (stays on GPU)
                 with torch.no_grad():
                     batch_predictions = self.model.forecast(
-                        batch_sequences, self.config["prediction_length"], instance_id
+                        batch_inputs,
+                        self.eval_prediction_length,
+                        [instance_id] * len(batch_inputs),
                     )
 
                 all_predictions.append(batch_predictions)
@@ -104,39 +175,45 @@ class Evaluate:
             # Combine predictions into single tensor
             predictions = torch.cat(all_predictions, dim=0)
 
-            # For final storage, keep as tensors
-            return [(targets[i], predictions[i]) for i in range(num_sequences)]
+            # Return pairs of targets and predictions
+            return [(target_sequences[i], predictions[i]) for i in range(num_sequences)]
 
         except Exception as e:
             print(f"Error evaluating instance {instance_id}: {str(e)}")
             return []
 
-    def evaluate_all(self, dataset: SpotDataset) -> Dict:
+    def evaluate_all(self, test_df: pd.DataFrame) -> Dict:
         """
-        Evaluate all instances in the dataset using efficient batch processing.
+        Evaluate all instances in the test DataFrame.
 
-        Returns metrics by instance ID to enable both aggregated and
-        per-instance analysis of model performance.
+        Args:
+            test_df: DataFrame containing test data
+
+        Returns:
+            Dictionary of metrics by instance ID
         """
         print("Evaluation Configuration:")
         print(f"- Model: {type(self.model).__name__}")
+        print(f"- Input sequence length: {self.dataset_config['sequence_length']}")
         print(f"- Prediction length: {self.config['prediction_length']}")
+        print(f"- Window step: {self.dataset_config['window_step']}")
         print(f"- Batch size: {self.batch_size}")
-        print(f"- Total instances: {len(dataset.instance_ids)}\n")
 
-        # Verify that the model has a normalizer attached
+        # Get unique instance IDs from the data
+        instance_ids = test_df["id_instance"].unique()
+        print(f"- Total instances: {len(instance_ids)}\n")
+
         if self.model.normalizer is not None:
-            print("Using model's normalizer for evaluation")
             norm_stats = self.model.normalizer.get_params_summary()
-            print(f"- Normalizer has parameters for {norm_stats['count']} instances")
+            print(
+                f"Using model's normalizer for evaluation {norm_stats['count']} instances"
+            )
         else:
-            # Missing normalizer is a serious issue worth highlighting
             print("Warning: Model doesn't have a normalizer attached")
 
-        # Process each instance sequentially
-        with tqdm(total=len(dataset.instance_ids), desc="Processing instances") as pbar:
-            for instance_id in dataset.instance_ids:
-                results = self.evaluate_instance(instance_id, dataset)
+        with tqdm(total=len(instance_ids), desc="Processing instances") as pbar:
+            for instance_id in instance_ids:
+                results = self.evaluate_instance(instance_id, test_df)
 
                 if results:
                     # Store results and calculate metrics
@@ -185,7 +262,7 @@ class Evaluate:
 
         # Save metrics (already in correct format)
         overall_metrics = self._calculate_overall_metrics()
-        with open(os.path.join(self.output_dir, "evaluation_metrics.json"), "w") as f:
+        with open(os.path.join(self.output_dir, "overall_metrics.json"), "w") as f:
             json.dump(overall_metrics, f, indent=2)
 
         # Save per-instance metrics (convert keys to strings for JSON)

@@ -13,30 +13,11 @@ class SpotGRU(Model):
         "input_size",
         "num_layers",
         "prediction_length",
+        "feature_size",
     ]
 
-    def __init__(
-        self, config_path: Optional[str] = None, config_dict: Optional[Dict] = None
-    ):
-        super().__init__()
-
-        if config_path:
-            self.config = load_config(config_path, "model_config", self.REQUIRED_FIELDS)
-        elif config_dict:
-            self.config = config_dict
-            # Validate required fields
-            missing_fields = [
-                field for field in self.REQUIRED_FIELDS if field not in config_dict
-            ]
-            if missing_fields:
-                raise ValueError(
-                    f"Missing required fields in config_dict: {missing_fields}"
-                )
-        else:
-            raise ValueError("Either config_path or config_dict must be provided")
-
-        self._build_model(self.config)
-        self.initialized = True
+    def __init__(self, work_dir: str):
+        super().__init__(work_dir)
 
     def _build_model(self, config: Dict[str, Any]) -> None:
         # GRU encoder
@@ -46,6 +27,19 @@ class SpotGRU(Model):
             num_layers=config["num_layers"],
             batch_first=True,
         )
+
+        # Feature processing network (if features are used)
+        self.feature_size = config.get("feature_size", 0)
+        if self.feature_size > 0:
+            self.feature_net = nn.Sequential(
+                nn.Linear(self.feature_size, config["hidden_size"]),
+                nn.ReLU(),
+                nn.Linear(config["hidden_size"], config["hidden_size"]),
+                nn.ReLU(),
+            )
+
+            # Combining layer to merge GRU and feature outputs
+            self.combiner = nn.Linear(config["hidden_size"] * 2, config["hidden_size"])
 
         # Decoder for multi-step output
         self.decoder = nn.Linear(config["hidden_size"], config["prediction_length"])
@@ -69,6 +63,17 @@ class SpotGRU(Model):
         nn.init.kaiming_normal_(self.decoder.weight, nonlinearity="linear")
         nn.init.constant_(self.decoder.bias, 0.0)
 
+        # Initialize feature network if it exists
+        if self.feature_size > 0:
+            for m in self.feature_net.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0.0)
+
+            nn.init.kaiming_normal_(self.combiner.weight, nonlinearity="relu")
+            nn.init.constant_(self.combiner.bias, 0.0)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through the model.
@@ -80,18 +85,29 @@ class SpotGRU(Model):
         Returns:
             Predictions of shape (batch_size, prediction_length)
         """
-        if len(x.shape) == 2:
-            x = x.unsqueeze(-1)  # Add feature dimension
+        # Handle sequence and optional features
+        if isinstance(x, tuple):
+            sequence, features = x
+        else:
+            sequence, features = x, None
+
+        if len(sequence.shape) == 2:
+            sequence = sequence.unsqueeze(-1)  # Add feature dimension
 
         # Process through GRU encoder
-        _, hidden = self.gru(x)
-
-        # Get last hidden state from the top layer
+        _, hidden = self.gru(sequence)
         last_hidden = hidden[-1]  # (batch_size, hidden_size)
 
-        # Decode to get multi-step prediction
-        output = self.decoder(last_hidden)  # (batch_size, prediction_length)
+        # Process features if available
+        if features is not None and self.feature_size > 0:
+            processed_features = self.feature_net(features)
+            combined = torch.cat([last_hidden, processed_features], dim=1)
+            final_hidden = self.combiner(combined)
+        else:
+            final_hidden = last_hidden
 
+        # Decode to get multi-step prediction
+        output = self.decoder(final_hidden)
         output = output * self.config["output_scale"]
 
         return output

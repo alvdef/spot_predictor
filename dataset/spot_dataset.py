@@ -18,7 +18,7 @@ class SpotDataset(Dataset):
         "batch_size",
     ]
 
-    def __init__(self, df: pd.DataFrame, config_path: str = "config.yaml"):
+    def __init__(self, df: pd.DataFrame, work_dir: str):
         """Initialize dataset with all data directly on GPU."""
         if df is None or df.empty:
             raise ValueError("DataFrame cannot be None or empty")
@@ -28,7 +28,9 @@ class SpotDataset(Dataset):
                 "DataFrame must contain 'spot_price' and 'id_instance' columns"
             )
 
-        self.config = load_config(config_path, "dataset_config", self.REQUIRED_FIELDS)
+        self.config = load_config(
+            f"{work_dir}/config.yaml", "dataset_config", self.REQUIRED_FIELDS
+        )
         self.device = get_device()
 
         self.X, self.y, self.instance_ids = self._create_sequences(df)
