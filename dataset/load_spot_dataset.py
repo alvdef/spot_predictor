@@ -44,7 +44,7 @@ class LoadSpotDataset:
         try:
             self.s3 = boto3.client("s3")
         except Exception as e:
-            self.logger.error(f"Failed to initialize S3 client: {str(e)}")
+            print(f"Failed to initialize S3 client: {str(e)}")
             raise
 
     @lru_cache(maxsize=32)
@@ -59,28 +59,29 @@ class LoadSpotDataset:
         """
         try:
             if not os.path.exists(self.data_dir):
-                self.logger.info(
-                    f"{self.data_dir} does not exist. Downloading files from S3..."
-                )
+                print(f"{self.data_dir} does not exist. Downloading files from S3...")
                 self._download_files()
 
             prices_dfs = []
             instance_info_dfs = []
 
             for region in self.config["regions"]:
-                self.logger.info(f"Loading info from {region}")
+                print(f"Loading info from {region}")
                 # Load instance info
                 region_instance_info_df = self.read_instance_info(region)
                 if not region_instance_info_df.empty:
+                    print(f"Loaded instance info for {region}")
                     instance_info_dfs.append(region_instance_info_df)
 
                 # Load prices
                 region_prices_df = self.read_prices_files(region)
                 if not region_prices_df.empty:
+                    print(f"Loaded prices for {region}")
                     prices_dfs.append(region_prices_df)
 
             if not prices_dfs or not instance_info_dfs:
-                raise ValueError("No data loaded for any region")
+                # Print diagnostic information about the filters
+                print("No instances matched the specified filters. Debug information:")
 
             # Combine data
             prices_df = pd.concat(prices_dfs, ignore_index=True)
@@ -96,7 +97,7 @@ class LoadSpotDataset:
             return prices_df, instance_info_df
 
         except Exception as e:
-            self.logger.error(f"Failed to load data: {str(e)}")
+            print(f"Failed to load data: {str(e)}")
             raise
 
     def get_training_validation_test_split(
@@ -119,7 +120,7 @@ class LoadSpotDataset:
             return train_df, val_df, test_df
 
         except Exception as e:
-            self.logger.error(f"Failed to split data: {str(e)}")
+            print(f"Failed to split data: {str(e)}")
             raise
 
     def read_instance_info(self, region: str) -> pd.DataFrame:
@@ -143,38 +144,92 @@ class LoadSpotDataset:
                 lambda x: ast.literal_eval(x) if isinstance(x, str) else x
             )
 
-            # Apply filtering based on configuration
+            # Inspect unique values in 'architectures' column
+            print(
+                f"Unique architectures: {instance_info_df['architectures'].explode().unique()}"
+            )
+
             if "instance_filters" in self.config:
                 filters = self.config.get("instance_filters", {})
+                print(f"Filters being applied: {filters}")  # Print all filters
 
                 if "instance_family" in filters and filters["instance_family"]:
+                    print(
+                        f"Applying instance_family filter: {filters['instance_family']}"
+                    )
                     instance_info_df = instance_info_df[
                         instance_info_df["instance_family"].isin(
                             filters["instance_family"]
                         )
                     ]
+                    print(
+                        f"Instances after instance_family filter: {len(instance_info_df)}"
+                    )
+
+                if "architectures" in filters and filters["architectures"]:
+                    print(f"Applying architectures filter: {filters['architectures']}")
+                    instance_info_df = instance_info_df[
+                        instance_info_df["architectures"].apply(
+                            lambda x: any(
+                                arch in filters["architectures"] for arch in x
+                            )
+                        )
+                    ]
+                    print(
+                        f"Instances after architectures filter: {len(instance_info_df)}"
+                    )
+
+                if "generation" in filters and filters["generation"]:
+                    print(f"Applying generation filter: {filters['generation']}")
+                    instance_info_df = instance_info_df[
+                        instance_info_df["generation"]
+                        .astype(str)
+                        .isin([str(g) for g in filters["generation"]])
+                    ]
+                    print(f"Instances after generation filter: {len(instance_info_df)}")
 
                 if "size" in filters and filters["size"]:
+                    print(f"Applying size filter: {filters['size']}")
                     instance_info_df = instance_info_df[
                         instance_info_df["size"].isin(filters["size"])
                     ]
+                    print(f"Instances after size filter: {len(instance_info_df)}")
 
                 if "product_description" in filters and filters["product_description"]:
+                    print(
+                        f"Applying product_description filter: {filters['product_description']}"
+                    )
                     product_descriptions = filters["product_description"]
                     instance_info_df = instance_info_df[
                         instance_info_df["product_description"].isin(
                             product_descriptions
                         )
                     ]
+                    print(
+                        f"Instances after product_description filter: {len(instance_info_df)}"
+                    )
 
                 if "instance_type" in filters and filters["instance_type"]:
+                    print(f"Applying instance_type filter: {filters['instance_type']}")
                     instance_info_df = instance_info_df[
                         instance_info_df["instance_type"].isin(filters["instance_type"])
                     ]
+                    print(
+                        f"Instances after instance_type filter: {len(instance_info_df)}"
+                    )
+
+                if "metal" in filters and not filters["metal"]:
+                    print(f"Applying metal filter: {filters['metal']}")
+                    instance_info_df = instance_info_df[
+                        ~instance_info_df["size"].str.contains(
+                            "metal", case=False, na=False
+                        )
+                    ]
+                    print(f"Instances after metal filter: {len(instance_info_df)}")
 
             return instance_info_df
         except Exception as e:
-            self.logger.error(f"Failed to read instance info for {region}: {str(e)}")
+            print(f"Failed to read instance info for {region}: {str(e)}")
             return pd.DataFrame()
 
     def read_prices_files(self, region: str) -> pd.DataFrame:
@@ -207,31 +262,171 @@ class LoadSpotDataset:
 
             return prices_df
         except Exception as e:
-            self.logger.error(f"Failed to read prices for {region}: {str(e)}")
+            print(f"Failed to read prices for {region}: {str(e)}")
             return pd.DataFrame()
 
     def _download_files(self) -> None:
-        """Download required files from S3."""
+        """Download required files from S3.
+
+        Uses an incremental download strategy to only fetch new or updated files
+        when the data directory already exists, reducing bandwidth and time.
+        Instance info files are always downloaded as they're critical for the dataset.
+        """
         try:
-            os.makedirs(self.data_dir)
             bucket_name = "spot-datasets"
             regions = self.config["regions"]
 
-            def download_file(key):
-                local_path = os.path.join(self.data_dir, key)
-                if not os.path.exists(os.path.dirname(local_path)):
-                    os.makedirs(os.path.dirname(local_path))
-                self.s3.download_file(bucket_name, key, local_path)
-                print(f"Downloaded {key}")
+            if not os.path.exists(self.data_dir):
+                print(
+                    f"Data directory {self.data_dir} does not exist. Creating it and downloading all files..."
+                )
+                os.makedirs(self.data_dir)
+            else:
+                print("Data directory exists, checking for latest files...")
 
-            paginator = self.s3.get_paginator("list_objects_v2")
-            for page in paginator.paginate(Bucket=bucket_name):
-                for obj in page.get("Contents", []):
-                    if any(f"_{region}" in obj["Key"] for region in regions):
-                        download_file(obj["Key"])
+            earliest_date = self._find_earliest_date_across_regions(regions)
+            self._download_files_from_s3(bucket_name, regions, earliest_date)
+
         except Exception as e:
-            self.logger.error(f"Failed to download files: {str(e)}")
+            print(f"Failed to download files: {str(e)}")
             raise
+
+    def _find_earliest_date_across_regions(self, regions):
+        """Find the minimum end date among the latest files across all regions.
+
+        This identifies the oldest data we need to update, ensuring complete
+        time series data across all regions.
+
+        Returns:
+            pd.Timestamp or None: The earliest date found, or None if no valid files exist
+        """
+        earliest_date = None
+
+        for region in regions:
+            price_files = glob.glob(f"{self.data_dir}/prices_{region}_*.csv")
+            if not price_files:
+                # If any region has no files, we need complete data from start date
+                earliest_date = self.config["start_date"]
+                continue
+
+            try:
+                # Find the most recent file (by end date in filename)
+                latest_file = sorted(price_files, key=lambda x: x.split("_")[-1])[-1]
+                file_name = os.path.basename(latest_file)
+
+                parts = file_name.split("_")
+                if len(parts) >= 4:
+                    end_date_str = parts[-1].split(".")[0]
+                    end_date = pd.Timestamp(end_date_str).date()
+
+                    # Track the minimum end date - we need all files from this date onward
+                    if earliest_date is None or end_date < earliest_date:
+                        earliest_date = end_date
+                        print(
+                            f"Latest file for {region}: {file_name}, end date: {end_date}"
+                        )
+            except Exception as e:
+                print(f"Error processing files for {region}: {e}")
+
+        return earliest_date
+
+    def _download_files_from_s3(self, bucket_name, regions, earliest_date):
+        """Download files from S3 with region and date filtering.
+
+        Prioritizes instance_info files which contain critical metadata,
+        then selectively downloads price files based on date range.
+
+        Args:
+            bucket_name: S3 bucket name
+            regions: List of AWS regions to download files for
+            earliest_date: Earliest date to download files from, or None for all files
+        """
+        if earliest_date:
+            print(
+                f"Downloading files from {earliest_date} onwards and all instance info files..."
+            )
+        else:
+            print("Downloading all files for specified regions...")
+
+        # Track regions with instance_info files to detect missing ones
+        instance_info_downloaded = set()
+
+        paginator = self.s3.get_paginator("list_objects_v2")
+
+        for page in paginator.paginate(Bucket=bucket_name):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+
+                # Extract region from filename if it exists
+                region_match = next(
+                    (
+                        region
+                        for region in regions
+                        if f"_{region}" in key or f"_{region}." in key
+                    ),
+                    None,
+                )
+
+                if not region_match:
+                    continue
+
+                # Prioritize instance_info files
+                if key.startswith("instance_info_"):
+                    if region_match not in instance_info_downloaded:
+                        self._download_single_file(bucket_name, key)
+                        instance_info_downloaded.add(region_match)
+                elif self._should_download_file(key, earliest_date):
+                    # Download price files based on date criteria
+                    self._download_single_file(bucket_name, key)
+
+        # Alert if any regions are missing instance info
+        missing_regions = set(regions) - instance_info_downloaded
+        if missing_regions:
+            print(
+                f"WARNING: Could not find instance_info files for regions: {missing_regions}"
+            )
+
+    def _should_download_file(self, key, earliest_date):
+        """Determine if a file should be downloaded based on our date criteria.
+
+        Instance info files are always downloaded. For price files, we only download
+        those with end dates after our earliest known date to avoid redundant downloads.
+
+        Args:
+            key: S3 object key
+            earliest_date: Earliest date to consider for download
+
+        Returns:
+            bool: True if file should be downloaded
+        """
+        # No date filter means download everything
+        if earliest_date is None:
+            return True
+
+        # Skip date filtering for non-price files
+        if not key.startswith("prices_"):
+            return True
+
+        # Extract and check end date for price files
+        parts = key.split("_")
+        if len(parts) >= 4:
+            try:
+                end_date_str = parts[-1].split(".")[0]
+                end_date = pd.Timestamp(end_date_str).date()
+                # Only download files with data in our target range
+                return end_date >= earliest_date
+            except Exception:
+                # Download file if we can't parse date (fail safe)
+                return True
+
+        return True
+
+    def _download_single_file(self, bucket_name, key):
+        """Download a file from S3, creating directories as needed."""
+        local_path = os.path.join(self.data_dir, key)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        self.s3.download_file(bucket_name, key, local_path)
+        print(f"Downloaded {key}")
 
     def _validate_loaded_data(
         self, prices_df: pd.DataFrame, instance_info_df: pd.DataFrame

@@ -3,23 +3,23 @@ from dataclasses import dataclass, field
 import os
 import json
 import torch
+from collections import defaultdict
 
 
 @dataclass
 class TrainingHistory:
     """Stores training metrics history for visualization and analysis."""
 
+    # Basic metrics that are always tracked
     train_loss: List[float] = field(default_factory=list)
     val_loss: List[float] = field(default_factory=list)
     learning_rates: List[float] = field(default_factory=list)
     grad_norms: List[float] = field(default_factory=list)
     epoch_duration: List[float] = field(default_factory=list)
-    mape: List[float] = field(default_factory=list)
-    direction_accuracy: List[float] = field(default_factory=list)
-    val_mape: List[float] = field(default_factory=list)
-    val_direction_accuracy: List[float] = field(default_factory=list)
-    mse: List[float] = field(default_factory=list)
-    val_mse: List[float] = field(default_factory=list)
+    
+    # Dynamic metrics storage
+    train_metrics: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
+    val_metrics: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
 
 
 @dataclass
@@ -55,8 +55,12 @@ class MetricsTracker:
         self.metrics_path = os.path.join(self.output_dir, "metrics.json")
 
     @property
-    def history(self) -> Dict[str, List[float]]:
-        return self._history.__dict__
+    def history(self) -> Dict[str, Any]:
+        # Convert defaultdicts to regular dicts for serialization
+        history_dict = self._history.__dict__.copy()
+        history_dict["train_metrics"] = dict(self._history.train_metrics)
+        history_dict["val_metrics"] = dict(self._history.val_metrics)
+        return history_dict
 
     @property
     def best_loss(self) -> float:
@@ -98,13 +102,10 @@ class MetricsTracker:
         self._history.grad_norms.append(self._grad_norm)
         self._history.epoch_duration.append(epoch_duration)
 
-        # Record training metrics
-        if "mape" in train_metrics:
-            self._history.mape.append(train_metrics["mape"])
-        if "direction" in train_metrics:
-            self._history.direction_accuracy.append(train_metrics["direction"])
-        if "mse" in train_metrics:
-            self._history.mse.append(train_metrics["mse"])
+        # Record all training metrics dynamically
+        for key, value in train_metrics.items():
+            if key != "learning_rate" and key != "grad_norm":  # Already tracked separately
+                self._history.train_metrics[key].append(value)
 
         # Record validation metrics if available
         if val_loss is not None:
@@ -112,14 +113,8 @@ class MetricsTracker:
             self._best_val_loss = min(self._best_val_loss, val_loss)
 
             if val_metrics:
-                if "mape" in val_metrics:
-                    self._history.val_mape.append(val_metrics["mape"])
-                if "direction" in val_metrics:
-                    self._history.val_direction_accuracy.append(
-                        val_metrics["direction"]
-                    )
-                if "mse" in val_metrics:
-                    self._history.val_mse.append(val_metrics["mse"])
+                for key, value in val_metrics.items():
+                    self._history.val_metrics[key].append(value)
 
         # Use validation loss for early stopping if available, otherwise use training loss
         current_eval_loss = val_loss if val_loss is not None else train_loss
@@ -169,58 +164,99 @@ class MetricsTracker:
         Updates progress bar with current batch metrics for real-time feedback during training.
         Extracts scalar values from tensors to avoid CUDA synchronization issues.
         """
+        # Create an ordered dictionary with loss first, then other metrics
         display_metrics = {}
+        
+        # Add loss first so it appears at the beginning
+        display_metrics["loss"] = f"{loss.item():.6f}"
+        
+        # Then add remaining metrics
         for key, value in metrics.items():
             display_metrics[key] = (
                 f"{value.item() if isinstance(value, torch.Tensor) else value:.6f}"
             )
 
-        display_metrics["loss"] = f"{loss.item():.6f}"
         pbar.set_postfix(display_metrics, refresh=False)  # Avoid unnecessary refreshes
 
-    def print_header(self) -> None:
-        """Prints the header row for training progress display."""
-        print(
-            f"{'Epoch':^8} | {'Train Loss':^14} | {'Val Loss':^14} | {'MSE':^10} | {'MAPE':^10} | "
-            f"{'Dir Acc':^10} | {'LR':^10} | {'Grad Norm':^10} | {'Duration':^8}"
-        )
-        print("-" * 120)
+    def print_header(self, metrics_keys=None) -> None:
+        """
+        Prints the header row for training progress display with dynamic metric names.
+        
+        Args:
+            metrics_keys: Optional list of metric names to display in header
+        """
+        # Store keys for later use in print_epoch_stats
+        if metrics_keys:
+            self._store_metric_keys(metrics_keys)
+            
+        # Create columns for basic metrics
+        header = [
+            f"{'Epoch':^8}",
+            f"{'Train Loss':^14}",
+            f"{'Val Loss':^14}"
+        ]
+        
+        # Add dynamic metric columns
+        if metrics_keys:
+            for metric in metrics_keys:
+                header.append(f"{metric:^12}")
+        else:
+            header.append(f"{'Metrics':^30}")
+        
+        # Add remaining columns
+        header.extend([
+            f"{'LR':^10}",
+            f"{'Duration':^8}"
+        ])
+        
+        # Print the header row
+        print(" | ".join(header))
+        
+        # Calculate total width and print the separator line
+        total_width = sum(len(col) for col in header) + (len(header) - 1) * 3  # 3 spaces for " | "
+        print("-" * total_width)
 
     def print_epoch_stats(self) -> None:
         """
         Prints statistics for the current epoch using stored state.
         Uses 'N/A' for missing metrics to maintain consistent output formatting.
         """
-        val_str = f"{self._val_loss:.6f}" if self._val_loss is not None else "N/A"
+        # Format base values
+        epoch_str = f"{self._epoch:^8d}"
+        train_loss_str = f"{self._train_loss:^14.6f}"
+        val_loss_str = f"{self._val_loss:^14.6f}" if self._val_loss is not None else f"{'N/A':^14}"
+        
+        # Format metrics
+        metric_parts = []
+        relevant_metrics = {k: v for k, v in self._train_metrics.items() 
+                          if k not in ("learning_rate", "grad_norm")}
+        
+        # Get ordered metric values that match the header
+        if hasattr(self, '_metrics_keys') and self._metrics_keys:
+            for key in self._metrics_keys:
+                if key in relevant_metrics:
+                    metric_parts.append(f"{relevant_metrics[key]:^12.4f}")
+                else:
+                    metric_parts.append(f"{'N/A':^12}")
+        # Fall back to alphabetical display if no keys defined
+        elif relevant_metrics:
+            for key, value in sorted(relevant_metrics.items()):
+                metric_parts.append(f"{value:^12.4f}")
+        else:
+            metric_parts.append(f"{'N/A':^30}")
+        
+        # Format learning rate and duration
+        lr_str = f"{self._learning_rate:^10.1e}"
+        duration_str = f"{self._epoch_duration:^8.1f}"
+        
+        # Combine all parts and print
+        row_parts = [epoch_str, train_loss_str, val_loss_str] + metric_parts + [lr_str, duration_str]
+        print(" | ".join(row_parts))
 
-        mse_str = (
-            f"{self._train_metrics.get('mse', 0):.6f}"
-            if "mse" in self._train_metrics
-            else "N/A"
-        )
-        mape_str = (
-            f"{self._train_metrics.get('mape', 0):.6f}"
-            if "mape" in self._train_metrics
-            else "N/A"
-        )
-        dir_acc_str = (
-            f"{self._train_metrics.get('direction', 0):.6f}"
-            if "direction" in self._train_metrics
-            else "N/A"
-        )
-
-        # Using end='' prevents double newlines when called in loops
-        print(
-            f"{self._epoch:^8d} | {self._train_loss:^14.6f} | {val_str:^14} | "
-            f"{mse_str:^10} | {mape_str:^10} | {dir_acc_str:^10} | "
-            f"{self._learning_rate:^10.1e} | {self._grad_norm:^10.1f} | {self._epoch_duration:^8.1f}",
-        )
-
-        # Record MSE if present - moved from print function to ensure data is captured
-        if "mse" in self._train_metrics:
-            self._history.mse.append(self._train_metrics["mse"])
-        if self._val_metrics and "mse" in self._val_metrics:
-            self._history.val_mse.append(self._val_metrics["mse"])
+    # Store metric keys for consistent display order
+    def _store_metric_keys(self, metrics_keys):
+        """Store metric keys to ensure consistent order in header and stats output."""
+        self._metrics_keys = metrics_keys
 
     def print_early_stopping(self) -> None:
         """Prints early stopping notification."""
@@ -248,19 +284,14 @@ class MetricsTracker:
                 "completed_epochs": len(self._history.train_loss),
             }
 
-            # Include final performance metrics when available
-            if self._history.mape:
-                metrics["final_mape"] = self._history.mape[-1]
-            if self._history.direction_accuracy:
-                metrics["final_direction_accuracy"] = self._history.direction_accuracy[
-                    -1
-                ]
-            if self._history.val_mape:
-                metrics["final_val_mape"] = self._history.val_mape[-1]
-            if self._history.val_direction_accuracy:
-                metrics["final_val_direction_accuracy"] = (
-                    self._history.val_direction_accuracy[-1]
-                )
+            # Include final performance metrics dynamically
+            for key, values in self._history.train_metrics.items():
+                if values:
+                    metrics[f"final_{key}"] = values[-1]
+                    
+            for key, values in self._history.val_metrics.items():
+                if values:
+                    metrics[f"final_val_{key}"] = values[-1]
 
             with open(self.metrics_path, "w") as f:
                 json.dump(metrics, f)

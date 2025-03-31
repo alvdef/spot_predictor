@@ -44,10 +44,11 @@ class Model(nn.Module, ABC):
         self.work_dir = work_dir
 
         self.config = load_config(
-            f"{work_dir}/config.yaml", "model_config", self.REQUIRED_FIELDS
+            f"{work_dir}/config.yaml", "model_config", self.__class__.REQUIRED_FIELDS
         )
         self._build_model(self.config)
         self.initialized = True
+        print(f"Initialized {self.__class__.__name__}")
 
     def attach_normalizer(self, normalizer) -> None:
         """
@@ -70,7 +71,7 @@ class Model(nn.Module, ABC):
 
     @abstractmethod
     def forward(
-        self, x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+        self, x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], target: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Forward pass through the model.
@@ -81,6 +82,7 @@ class Model(nn.Module, ABC):
                - A tuple (sequence, features) where:
                  sequence: Input tensor of shape (batch_size, seq_len, input_size)
                  features: Additional features tensor of shape (batch_size, feature_size)
+            target: Optional target tensor for models that use teacher forcing
 
         Returns:
             Output tensor

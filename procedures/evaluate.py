@@ -8,15 +8,15 @@ from tqdm import tqdm
 from collections import defaultdict
 
 from utils import get_device, load_config
+from utils.trend_metrics import (
+    calculate_significant_trend_accuracy,
+    calculate_spot_price_savings,
+)
 from model import Model
 
 
 class Evaluate:
-    FIELDS_EVALUATE = [
-        "prediction_length",
-        "n_timesteps_metrics",
-        "batch_size",
-    ]
+    FIELDS_EVALUATE = ["prediction_length", "n_timesteps_metrics", "batch_size"]
     FIELDS_DATASET = ["sequence_length", "window_step", "prediction_length"]
 
     def __init__(self, model: Model, work_dir: str):
@@ -53,11 +53,9 @@ class Evaluate:
         return [
             "n_timestep",
             "mape",
-            "smape",
-            "smape_std",
-            "smape_cv",
             "rmse",
-            "direction_accuracy",
+            "sgnif_trend_acc",
+            "cost_savings",
         ]
 
     def get_prediction_results(self, id_instance):
@@ -307,9 +305,11 @@ class Evaluate:
 
         return all_metrics
 
-    @staticmethod
     def _calculate_metrics(
-        predictions: List[torch.Tensor], targets: List[torch.Tensor], n_timesteps: int
+        self,
+        predictions: List[torch.Tensor],
+        targets: List[torch.Tensor],
+        n_timesteps: int,
     ) -> List[Dict]:
         """
         Calculate evaluation metrics using PyTorch operations for better efficiency.
@@ -322,6 +322,8 @@ class Evaluate:
         Returns:
             List of metric dictionaries for each segment
         """
+        significance_threshold = self.config["significance_threshold"]
+        decision_window = self.config["decision_window"]
         # Stack to create batched tensors
         pred_tensor = torch.stack(predictions)
         target_tensor = torch.stack(targets)
@@ -341,46 +343,35 @@ class Evaluate:
 
             # Calculate absolute differences
             abs_diff = torch.abs(pred_segments - target_segments)
-            abs_sum = torch.abs(pred_segments) + torch.abs(target_segments)
-
-            # Avoid division by zero
-            abs_sum = torch.clamp_min(abs_sum, epsilon)
             abs_targets = torch.clamp_min(torch.abs(target_segments), epsilon)
-
-            # SMAPE - symmetric mean absolute percentage error
-            smape_values = 2 * abs_diff / abs_sum
 
             # MAPE - mean absolute percentage error
             mape_values = abs_diff / abs_targets
 
-            # Direction accuracy - compares signs of price movements
-            pred_diff = pred_segments[:, 1:] - pred_segments[:, :-1]
-            target_diff = target_segments[:, 1:] - target_segments[:, :-1]
-            direction_match = (torch.sign(pred_diff) == torch.sign(target_diff)).float()
+            # Calculate significant trend accuracy
+            sig_accuracy = calculate_significant_trend_accuracy(
+                predictions, targets, significance_threshold
+            )
+
+            # Calculate EC2 cost optimization savings for the whole window
+            # This is used for non-segmented evaluation cases
+            cost_savings = calculate_spot_price_savings(
+                predictions, targets, decision_window
+            )
 
             # Convert results to Python types for JSON serialization
-            metrics.append(
-                {
-                    "n_timestep": start,
-                    "mape": float(torch.mean(mape_values).item() * 100),
-                    "smape": float(torch.mean(smape_values).item() * 100),
-                    "smape_std": float(torch.std(smape_values).item() * 100),
-                    "smape_cv": float(
-                        (
-                            torch.std(smape_values)
-                            / (torch.mean(smape_values) + epsilon)
-                        ).item()
-                        * 100
-                    ),
-                    "rmse": float(
-                        torch.sqrt(
-                            torch.mean((pred_segments - target_segments) ** 2)
-                        ).item()
-                    ),
-                    "direction_accuracy": float(
-                        torch.mean(direction_match).item() * 100
-                    ),
-                }
-            )
+            segment_metrics = {
+                "n_timestep": start,
+                "mape": float(torch.mean(mape_values).item() * 100),
+                "rmse": float(
+                    torch.sqrt(
+                        torch.mean((pred_segments - target_segments) ** 2)
+                    ).item()
+                ),
+                "sig_accuracy": sig_accuracy,
+                "cost_savings": cost_savings,
+            }
+
+            metrics.append(segment_metrics)
 
         return metrics

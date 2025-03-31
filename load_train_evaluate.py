@@ -3,7 +3,7 @@ from datetime import datetime
 import os
 import pandas as pd
 
-from model import SpotGRU
+from model import get_model
 from procedures import Training, Evaluate
 from dataset import SpotDataset, LoadSpotDataset
 from utils import get_name
@@ -12,7 +12,7 @@ from utils import get_name
 # # Set up model directory structure
 
 # %%
-DIR = "_models/" + get_name()
+DIR = get_name()
 os.makedirs(DIR + "/data", exist_ok=True)
 
 os.system(f"cp config.yaml {DIR}")
@@ -38,10 +38,6 @@ test_df.to_pickle(f"{DIR}/data/test_df.pkl")
 
 print(f"Data saved to {DIR}")
 print(f"Created on {datetime.now()}")
-
-# %% [markdown]
-# # Information on dataframes
-
 
 # %%
 def display_df_stats(df, name):
@@ -85,36 +81,12 @@ print(
     f"Test DataFrame: Start Date = {test_start_date}, End Date = {test_end_date}, Number of Days = {test_days}"
 )
 
-# %% [markdown]
-# ## All prices dataframe
-
 # %%
 display_df_stats(prices_df, "Prices DataFrame")
-
-# %% [markdown]
-# ## Instance info dataframe
-
-# %%
 display_df_stats(instance_info_df, "Instance Info DataFrame")
-
-# %% [markdown]
-# ## Training dataframe
-
-# %%
 display_df_stats(train_df, "Training Set")
-
-# %% [markdown]
-# ## Validation dataframe
-
-# %%
 display_df_stats(val_df, "Validation Set")
-
-# %% [markdown]
-# ## Test dataframe
-
-# %%
 display_df_stats(test_df, "Test Set")
-
 
 train_dataset = SpotDataset(train_df, DIR)
 val_dataset = SpotDataset(val_df, DIR)
@@ -123,19 +95,21 @@ val_dataset = SpotDataset(val_df, DIR)
 # # Model Training
 
 # %%
-model = SpotGRU(DIR)
+model = get_model(DIR)
+
+print(f"Training started at: {datetime.now()}")
 
 modelTraining = Training(model, DIR)
 modelTraining.train_model(train_dataset, val_dataset)
-
+print(f"Training endend at: {datetime.now()}")
 # %%
 model.save()
-
 
 evaluator = Evaluate(model, DIR)
 
 # %%
 metrics = evaluator.evaluate_all(test_df)
+print(f"Evaluation endend at: {datetime.now()}")
 
 
 # %%

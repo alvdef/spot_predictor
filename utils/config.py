@@ -38,4 +38,4 @@ def load_config(config_path: str, config_key: str, required_fields: list[str]) -
 
 def get_name():
     with open("config.yaml", "r") as config_file:
-        return yaml.safe_load(config_file)["model_name"]
+        return "_models/" + yaml.safe_load(config_file)["model_name"]

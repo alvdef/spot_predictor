@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 import os
 from datetime import datetime
@@ -5,16 +6,14 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from loss import MultiStepForecastLoss
+from loss import get_loss
 from utils import get_device, load_config, MetricsTracker, CheckpointTracker
-from dataset import SpotDataset
-from dataset.normalizer import Normalizer
+from dataset import SpotDataset, Normalizer
 from model import Model
 
 
 class Training:
     REQUIRED_CONFIG_FIELDS = [
-        "mse_weight",
         "learning_rate",
         "weight_decay",
         "max_learning_rate",
@@ -55,7 +54,7 @@ class Training:
         self.metrics.early_stopping_patience = self.config["patience"]
 
         # Initialize loss function with configurable weights
-        self.criterion = MultiStepForecastLoss()
+        self.criterion = get_loss(work_dir)
 
         # AdamW optimizer tends to work better than Adam for time series models
         self.optimizer = torch.optim.AdamW(
@@ -106,7 +105,9 @@ class Training:
         if self.model.normalizer is None:
             self.prepare_normalizer(dataset)
 
-        self.metrics.print_header()
+        # Get metric names from the criterion for dynamic header display
+        metric_names = self.criterion.get_metric_names()
+        self.metrics.print_header(metrics_keys=metric_names)
 
         # OneCycleLR scheduler helps with faster convergence and avoiding local minima
         steps_per_epoch = len(train_loader)
@@ -166,7 +167,7 @@ class Training:
     def _execute_training_phase(self, train_loader: DataLoader) -> Tuple[float, Dict]:
         self.model.train()
         epoch_loss = torch.tensor(0.0, device=self.device)
-        epoch_metrics = {"mse": 0.0, "mape": 0.0, "direction": 0.0}
+        epoch_metrics = defaultdict(float)
         batch_count = 0
         grad_norm = torch.tensor(0.0, device=self.device)
 
@@ -176,7 +177,7 @@ class Training:
         with tqdm(train_loader, desc="Training", leave=False) as pbar:
             for data, target in pbar:
                 # Forward pass and loss calculation
-                output = self.model(data)
+                output = self.model(data, target)
                 loss, metrics = self.criterion(output, target)
 
                 # Backward pass with optimization
@@ -220,7 +221,7 @@ class Training:
         """Execute validation with no gradients to check for overfitting."""
         self.model.eval()
         total_loss = 0
-        val_metrics = {"mse": 0.0, "mape": 0.0, "direction": 0.0}
+        val_metrics = defaultdict(float)
         batch_count = 0
 
         # Determine if data is already on device (for speed optimization)
@@ -266,19 +267,7 @@ class Training:
         print("\nTraining interrupted by user")
         print("Saving current model state...")
 
-        # Use the best available loss metric
-        current_loss = (
-            self.metrics._val_loss
-            if self.metrics._val_loss is not None
-            else self.metrics._train_loss
-        )
-
-        model_state = {
-            "model_state_dict": self.model.state_dict(),
-            "loss": current_loss,
-            "config": self.config,
-        }
-        self.checkpoints.save(model_state, is_best=False)
+        self.model.save()
         self.metrics.save_to_files()
 
     def _convert_numeric_params(self):
@@ -286,7 +275,6 @@ class Training:
         Convert config parameters to appropriate numeric types.
         Config parser returns strings, but we need actual numbers.
         """
-        self.config["mse_weight"] = float(self.config["mse_weight"])
         self.config["learning_rate"] = float(self.config["learning_rate"])
         self.config["weight_decay"] = float(self.config["weight_decay"])
         self.config["max_learning_rate"] = float(self.config["max_learning_rate"])

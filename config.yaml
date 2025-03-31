@@ -1,51 +1,66 @@
-model_name: useast1-c
+# Compute family intel for eu-north-1 from gen 5 to 8 (2018-). No metal
+# Timestep 4h, model predicts 1day with 30day context. Evaluation on 20days with 1day timestep.
+
+model_name: eunorth-c-58-seq
   
 dataset_features:
   data_folder: data
   start_date: 2024-04-01  # 2023-10-01
-  end_date: 2025-03-01    # 2024-12-30
-  regions: ['us-east-1']  # ['ap-northeast-1','ap-northeast-2','ap-northeast-3','ap-south-1', 'ap-southeast-1','ap-southeast-2','ca-central-1','eu-central-1','eu-north-1','eu-west-1','eu-west-2','eu-west-3','sa-east-1','us-east-1','us-east-2','us-west-1','us-west-2']
+  end_date: 2025-03-26    # 2024-12-30
+  regions: ['eu-north-1']
+  # regions: ['ap-northeast-1','ap-northeast-2','ap-northeast-3','ap-south-1', 'ap-southeast-1','ap-southeast-2','ca-central-1','eu-central-1','eu-north-1','eu-west-1','eu-west-2','eu-west-3','sa-east-1','us-east-1','us-east-2','us-west-1','us-west-2']
   instance_filters:
     product_description: ['Linux/UNIX']
-    instance_type: ['c5.large']
+    # instance_type: ['c5.large']
+    generation: ['5', '6', '7', '8']
+    architectures: ['x86_64']
     # av_zone: []
-    # instance_family: ['c']
+    instance_family: ['c']
+    metal: False
     # size: ['nano', 'micro', 'small', 'medium', 'large', 'xlarge', '2xlarge']
   
   target_col: spot_price
   time_col: price_timestamp
   timestep_hours: 4
   time_features:
-    - dayofweek
-    - dayofmonth
+    # - dayofweek
+    # - dayofmonth
 
 dataset_config:
-  sequence_length: 64     # Num of time steps in input sequence (4*7dias)
-  window_step: 8          # Step size between consecutive sequences
-  prediction_length: 4    # Num of future time steps to predict
-  batch_size: 16          # Num of samples per batch
+  sequence_length: 120     # Num of timesteps (NO DAYS!!) in input sequence
+  window_step: 2           # Step size between consecutive sequences
+  prediction_length: 6     # Num of future time steps to predict
+  batch_size: 64           # Num of samples per batch
 
 model_config:
+  model_type: Seq2Seq
   input_size: 1           # Num of input features
-  hidden_size: 98         # Num of hidden units in LSTM layers
+  hidden_size: 60         # Num of hidden units in LSTM layers
   num_layers: 2           # Num of stacked LSTM layers
-  output_scale: 15.0     # Scaling factor for model outputs to handle price ranges
+  output_scale: 15.0      # Scaling factor for model outputs to handle price ranges
   shuffle_buffer: 1000     # Buffer size for dataset shuffling
-  prediction_length: 4
+  prediction_length: 6    # MUST MATCH dataset_config.prediction_length
   feature_size: 0         # Size of additional feature vector (set to 0 if not using features)
+  teacher_forcing_ratio: 0.7
+
+loss_config:
+  loss_type: MultiStepMSELoss
+  mse_weight: 1.0
+  trend_weight: 0.0
+  significant_threshold: 0.02
+  smoothing_factor: 10.0
 
 training_hyperparams:
   epochs: 80              # Num of training epochs
-  learning_rate: 1e-6     # Initial learning rate for optimizer
+  learning_rate: 1e-4     # Initial learning rate for optimizer
   max_learning_rate: 2e-6 # Maximum learning rate for scheduler
   weight_decay: 5e-5      # L2 regularization factor
-  mse_weight: 0.8
   patience: 10
   pct_start: 0.2
   div_factor: 10
 
 # sequence_lenght in dataset_config
 evaluate_config:
-  prediction_length: 20   # 20dias
-  n_timesteps_metrics: 20 # 4*5dias
+  prediction_length: 20   # Num of days to predict (eval_pred = dataset.pred_len*eval.pred_len)
+  n_timesteps_metrics: 6  # Num of timesteps to group metrics by
   batch_size: 32          # Batch size for evaluation

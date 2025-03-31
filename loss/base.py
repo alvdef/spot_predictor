@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
+from utils.config import load_config
+
 
 class LossFunction(nn.Module, ABC):
     """
@@ -17,8 +19,15 @@ class LossFunction(nn.Module, ABC):
             Utility method to format metrics for logging.
     """
 
-    def __init__(self):
+    REQUIRED_FIELDS: List[str] = []
+
+    def __init__(self, work_dir: str):
         super().__init__()
+        self.work_dir = work_dir
+
+        self.config = load_config(
+            f"{work_dir}/config.yaml", "loss_config", self.__class__.REQUIRED_FIELDS
+        )
 
     @abstractmethod
     def forward(
@@ -47,3 +56,16 @@ class LossFunction(nn.Module, ABC):
             Formatted string of metrics
         """
         return " | ".join([f"{key}: {value:.4f}" for key, value in metrics.items()])
+
+    def get_metric_names(self) -> List[str]:
+        """
+        Returns a list of metric names this loss function calculates.
+        
+        This method should be overridden by subclasses to provide specific metric names.
+        Used by MetricsTracker to display the correct metrics in training output.
+        
+        Returns:
+            List of metric names as strings
+        """
+        # Default implementation returns empty list
+        return []

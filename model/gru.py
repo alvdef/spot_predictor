@@ -3,10 +3,9 @@ import torch
 import torch.nn as nn
 
 from .base import Model
-from utils import load_config
 
 
-class SpotGRU(Model):
+class GRU(Model):
     REQUIRED_FIELDS = [
         "hidden_size",
         "output_scale",
@@ -74,13 +73,14 @@ class SpotGRU(Model):
             nn.init.kaiming_normal_(self.combiner.weight, nonlinearity="relu")
             nn.init.constant_(self.combiner.bias, 0.0)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, target: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Forward pass through the model.
 
         Args:
             x: Input sequence of shape (batch_size, sequence_length)
                or (batch_size, sequence_length, features)
+            target: Optional target tensor (not used in this model, but included for API consistency)
 
         Returns:
             Predictions of shape (batch_size, prediction_length)
