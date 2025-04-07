@@ -1,12 +1,13 @@
 # %%
 from datetime import datetime
+import json
 import os
 import pandas as pd
 
 from model import get_model
 from procedures import Training, Evaluate
 from dataset import SpotDataset, LoadSpotDataset
-from utils import get_name
+from utils import get_name, ResultPlotter
 
 # %% [markdown]
 # # Set up model directory structure
@@ -40,22 +41,6 @@ print(f"Data saved to {DIR}")
 print(f"Created on {datetime.now()}")
 
 # %%
-def display_df_stats(df, name):
-    """Helper function to display DataFrame statistics"""
-    print(f"\n=== {name} Statistics ===")
-    print("\nShape:", df.shape)
-    print("\nInfo:")
-    df.info()
-    print("\nSample Data:")
-    print(df.head())
-    if "price_timestamp" in df.columns:
-        start_date = df["price_timestamp"].min()
-        end_date = df["price_timestamp"].max()
-        days = (end_date - start_date).days
-        print(f"\nDate Range: {start_date} to {end_date} ({days} days)")
-
-
-# %%
 # Get start and end dates for train_df
 train_start_date = train_df["price_timestamp"].min()
 train_end_date = train_df["price_timestamp"].max()
@@ -81,18 +66,8 @@ print(
     f"Test DataFrame: Start Date = {test_start_date}, End Date = {test_end_date}, Number of Days = {test_days}"
 )
 
-# %%
-display_df_stats(prices_df, "Prices DataFrame")
-display_df_stats(instance_info_df, "Instance Info DataFrame")
-display_df_stats(train_df, "Training Set")
-display_df_stats(val_df, "Validation Set")
-display_df_stats(test_df, "Test Set")
-
 train_dataset = SpotDataset(train_df, DIR)
 val_dataset = SpotDataset(val_df, DIR)
-
-# %% [markdown]
-# # Model Training
 
 # %%
 model = get_model(DIR)
@@ -104,6 +79,11 @@ modelTraining.train_model(train_dataset, val_dataset)
 print(f"Training endend at: {datetime.now()}")
 # %%
 model.save()
+
+with open(f"{DIR}/training/training_history.json", "r") as f:
+    history = json.load(f)
+
+ResultPlotter(DIR).plot_training_history(history)
 
 evaluator = Evaluate(model, DIR)
 
@@ -128,7 +108,15 @@ def dump_metrics_to_csv(
         # Get instance properties
         instance_props = instance_info_df.loc[
             instance_id,
-            ["region", "av_zone", "instance_type", "generation", "modifiers", "size"],
+            [
+                "region",
+                "av_zone",
+                "instance_type",
+                "instance_family",
+                "generation",
+                "modifiers",
+                "size",
+            ],
         ].to_dict()  # type: ignore
 
         for metric in metrics_list:

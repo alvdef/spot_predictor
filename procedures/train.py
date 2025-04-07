@@ -97,6 +97,20 @@ class Training:
         self, dataset: SpotDataset, val_dataset: Optional[SpotDataset] = None
     ):
         """Execute the training loop for the model."""
+        print("Training Configuration:")
+        print(f"- Model: {type(self.model).__name__}")
+        print(f"- Input sequence length: {dataset.config['sequence_length']}")
+        print(f"- Prediction length: {dataset.config['prediction_length']}")
+        print(f"- Window step: {dataset.config['window_step']}")
+        print(f"- Batch size: {dataset.config['batch_size']}")
+        print(f"- Learning rate: {self.config['learning_rate']}")
+        print(f"- Max learning rate: {self.config['max_learning_rate']}")
+        print(f"- Weight decay: {self.config['weight_decay']}")
+        print(f"- Epochs: {self.config['epochs']}")
+        print(f"- Early stopping patience: {self.config['patience']}")
+        print(f"- Optimizer: {type(self.optimizer).__name__}")
+        print(f"- Loss function: {type(self.criterion).__name__}\n")
+
         # Create data loaders - handles batch creation and shuffling
         train_loader = dataset.get_data_loader(shuffle=True)
         val_loader = val_dataset.get_data_loader(shuffle=False) if val_dataset else None

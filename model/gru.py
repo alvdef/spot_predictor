@@ -73,7 +73,9 @@ class GRU(Model):
             nn.init.kaiming_normal_(self.combiner.weight, nonlinearity="relu")
             nn.init.constant_(self.combiner.bias, 0.0)
 
-    def forward(self, x: torch.Tensor, target: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, target: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
         Forward pass through the model.
 

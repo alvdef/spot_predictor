@@ -48,7 +48,6 @@ class Model(nn.Module, ABC):
         )
         self._build_model(self.config)
         self.initialized = True
-        print(f"Initialized {self.__class__.__name__}")
 
     def attach_normalizer(self, normalizer) -> None:
         """
@@ -71,7 +70,9 @@ class Model(nn.Module, ABC):
 
     @abstractmethod
     def forward(
-        self, x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], target: Optional[torch.Tensor] = None
+        self,
+        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+        target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through the model.

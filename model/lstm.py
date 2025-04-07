@@ -69,14 +69,16 @@ class LSTM(Model):
             nn.init.kaiming_normal_(self.combiner.weight, nonlinearity="relu")
             nn.init.zeros_(self.combiner.bias)
 
-    def forward(self, x: torch.Tensor, target: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, target: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
         Forward pass through the model.
-        
+
         Args:
             x: Input tensor or tuple of (sequence, features)
             target: Optional target tensor (not used in this model, but included for API consistency)
-        
+
         Returns:
             Predictions tensor
         """

@@ -13,8 +13,6 @@ class MultiStepMSELoss(LossFunction):
     def __init__(self, work_dir):
         super().__init__(work_dir)
 
-        print(f"Initialized MultiStepForecastLoss")
-
     def forward(self, y_pred, y_true):
         """
         Calculate combined loss

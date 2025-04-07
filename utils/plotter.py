@@ -12,7 +12,7 @@ class ResultPlotter:
 
     def __init__(self, work_dir: str = "output"):
         """Initialize plotter with output directory."""
-        self.output_dir = work_dir + "/plots"
+        self.output_dir = work_dir
         self.setup_style()
 
     def setup_style(self):
@@ -71,52 +71,80 @@ class ResultPlotter:
             axes[1, 0].legend()
             axes[1, 0].set_title("Gradient Norms")
 
-        # Plot MSE if available
-        if "mse" in history and len(history["mse"]) > 0:
-            mse = np.array(history["mse"])
-            axes[1, 1].plot(mse, label="Train MSE")
-            if "val_mse" in history and len(history["val_mse"]) > 0:
-                val_mse = np.array(history["val_mse"])
-                axes[1, 1].plot(val_mse, label="Validation MSE")
+        # Plot cumulative epoch duration
+        if "epoch_duration" in history:
+            epoch_duration = np.array(history["epoch_duration"])
+            # Calculate cumulative duration
+            cumulative_duration = np.cumsum(epoch_duration)
+
+            # Convert to hours for better readability
+            cumulative_hours = cumulative_duration / 3600
+
+            axes[1, 1].plot(cumulative_hours, label="Cumulative Training Time")
             axes[1, 1].set_xlabel("Epoch")
-            axes[1, 1].set_ylabel("MSE")
+            axes[1, 1].set_ylabel("Cumulative Time (hours)")
             axes[1, 1].grid(True)
             axes[1, 1].legend()
-            axes[1, 1].set_title("Mean Squared Error")
+            axes[1, 1].set_title("Cumulative Training Duration")
 
-        # Plot MAPE if available
-        if "mape" in history and len(history["mape"]) > 0:
-            mape = np.array(history["mape"])
-            axes[2, 0].plot(mape, label="Train MAPE")
-            if "val_mape" in history and len(history["val_mape"]) > 0:
-                val_mape = np.array(history["val_mape"])
-                axes[2, 0].plot(val_mape, label="Validation MAPE")
+            # Add annotation for total training time
+            total_time = cumulative_hours[-1]
+            axes[1, 1].annotate(
+                f"Total: {total_time:.2f} hours",
+                xy=(len(cumulative_hours) - 1, total_time),
+                xytext=(len(cumulative_hours) - 15, total_time * 0.9),
+                arrowprops=dict(arrowstyle="->"),
+            )
+
+        # Function to get metric data with fallback to nested locations
+        def get_metric_data(metric_name, prefix=""):
+            # Try direct access first
+            if (
+                prefix + metric_name in history
+                and len(history[prefix + metric_name]) > 0
+            ):
+                return np.array(history[prefix + metric_name])
+
+            # Try nested access under train_metrics/val_metrics
+            nested_key = "train_metrics" if prefix == "" else "val_metrics"
+            if nested_key in history and metric_name in history[nested_key]:
+                return np.array(history[nested_key][metric_name])
+
+            return np.array([])
+
+        # Plot MSE
+        train_mse = get_metric_data("mse")
+        val_mse = get_metric_data("mse", "val_")
+
+        if len(train_mse) > 0:
+            axes[2, 0].plot(train_mse, label="Train MSE")
+            if len(val_mse) > 0:
+                axes[2, 0].plot(val_mse, label="Validation MSE")
             axes[2, 0].set_xlabel("Epoch")
-            axes[2, 0].set_ylabel("MAPE (%)")
+            axes[2, 0].set_ylabel("MSE")
             axes[2, 0].grid(True)
             axes[2, 0].legend()
-            axes[2, 0].set_title("Mean Absolute Percentage Error")
+            axes[2, 0].set_title("Mean Squared Error")
 
-        # Plot direction accuracy if available
-        if "direction_accuracy" in history and len(history["direction_accuracy"]) > 0:
-            dir_acc = np.array(history["direction_accuracy"])
-            axes[2, 1].plot(dir_acc, label="Train Direction Accuracy")
-            if (
-                "val_direction_accuracy" in history
-                and len(history["val_direction_accuracy"]) > 0
-            ):
-                val_dir_acc = np.array(history["val_direction_accuracy"])
-                axes[2, 1].plot(val_dir_acc, label="Validation Direction Accuracy")
+        # Plot MAPE
+        train_mape = get_metric_data("mape")
+        val_mape = get_metric_data("mape", "val_")
+
+        if len(train_mape) > 0:
+            axes[2, 1].plot(train_mape, label="Train MAPE")
+            if len(val_mape) > 0:
+                axes[2, 1].plot(val_mape, label="Validation MAPE")
             axes[2, 1].set_xlabel("Epoch")
-            axes[2, 1].set_ylabel("Direction Accuracy")
+            axes[2, 1].set_ylabel("MAPE (%)")
             axes[2, 1].grid(True)
             axes[2, 1].legend()
-            axes[2, 1].set_title("Price Direction Prediction Accuracy")
+            axes[2, 1].set_title("Mean Absolute Percentage Error")
 
         plt.tight_layout()
         if save:
             plt.savefig(f"{self.output_dir}/training_history.png")
-        plt.show()
+        else:
+            plt.show()
 
     def plot_predictions(
         self,

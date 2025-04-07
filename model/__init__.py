@@ -28,7 +28,6 @@ def get_model(work_dir):
     with open(f"{work_dir}/config.yaml", "r") as f:
         config = yaml.safe_load(f)
     model_type = config["model_config"]["model_type"]
-    print(f"Model {model_type} selected on config")
 
     if model_type not in MODEL_REGISTRY:
         available_models = ", ".join(MODEL_REGISTRY.keys())
@@ -37,7 +36,6 @@ def get_model(work_dir):
         )
 
     model_class = MODEL_REGISTRY[model_type]
-    print(f"Using {model_class}")
     return model_class(work_dir)
 
 

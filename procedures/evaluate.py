@@ -6,18 +6,28 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
+import yaml
+from datetime import date
 
 from utils import get_device, load_config
 from utils.trend_metrics import (
     calculate_significant_trend_accuracy,
     calculate_spot_price_savings,
+    calculate_perfect_information_savings,
 )
 from model import Model
 
 
 class Evaluate:
-    FIELDS_EVALUATE = ["prediction_length", "n_timesteps_metrics", "batch_size"]
-    FIELDS_DATASET = ["sequence_length", "window_step", "prediction_length"]
+    REQUIRED_CONFIG_FIELDS = [
+        "prediction_length",
+        "n_timesteps_metrics",
+        "batch_size",
+        "significance_threshold",
+        "sequence_length",
+        "window_step",
+        "prediction_length",
+    ]
 
     def __init__(self, model: Model, work_dir: str):
         self.model = model
@@ -26,19 +36,13 @@ class Evaluate:
         self.model.eval()
 
         self.config = load_config(
-            f"{work_dir}/config.yaml", "evaluate_config", self.FIELDS_EVALUATE
-        )
-        self.dataset_config = load_config(
-            f"{work_dir}/config.yaml", "dataset_config", self.FIELDS_DATASET
+            f"{work_dir}/config.yaml", "evaluate_config", self.REQUIRED_CONFIG_FIELDS
         )
         self.output_dir = f"{work_dir}/evaluation"
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Batch size for efficient processing
-        self.batch_size = self.config.get("batch_size", 32)
-        self.eval_prediction_length = (
-            self.config["prediction_length"] * self.dataset_config["prediction_length"]
-        )
+        self.batch_size = self.config["batch_size"]
 
         # Storage for results and metrics
         self.segmented_metrics: DefaultDict[int, List[Dict]] = defaultdict(list)
@@ -56,6 +60,8 @@ class Evaluate:
             "rmse",
             "sgnif_trend_acc",
             "cost_savings",
+            "perfect_savings",
+            "savings_efficiency",
         ]
 
     def get_prediction_results(self, id_instance):
@@ -74,14 +80,14 @@ class Evaluate:
         Returns:
             Tuple of (input_sequences, target_sequences) as tensors
         """
-        sequence_length = self.dataset_config["sequence_length"]
-        window_step = self.dataset_config["window_step"]
+        sequence_length = self.config["sequence_length"]
+        window_step = self.config["window_step"]
 
         values = instance_df["spot_price"].values.astype(np.float32)
         total_length = len(values)
 
         # Calculate how many sequences we can create
-        required_length = sequence_length + self.eval_prediction_length
+        required_length = sequence_length + self.config["prediction_length"]
         if total_length < required_length:
             return None, None  # type: ignore
 
@@ -94,7 +100,7 @@ class Evaluate:
         for i in range(n_sequences):
             start_idx = i * window_step
             end_input_idx = start_idx + sequence_length
-            end_target_idx = end_input_idx + self.eval_prediction_length
+            end_target_idx = end_input_idx + self.config["prediction_length"]
 
             if end_target_idx > total_length:
                 break
@@ -161,7 +167,7 @@ class Evaluate:
                 with torch.no_grad():
                     batch_predictions = self.model.forecast(
                         batch_inputs,
-                        self.eval_prediction_length,
+                        self.config["prediction_length"],
                         [instance_id] * len(batch_inputs),
                     )
 
@@ -180,7 +186,7 @@ class Evaluate:
             print(f"Error evaluating instance {instance_id}: {str(e)}")
             return []
 
-    def evaluate_all(self, test_df: pd.DataFrame) -> Dict:
+    def evaluate_all(self, test_df: pd.DataFrame, instance_info_df=None) -> Dict:
         """
         Evaluate all instances in the test DataFrame.
 
@@ -192,14 +198,14 @@ class Evaluate:
         """
         print("Evaluation Configuration:")
         print(f"- Model: {type(self.model).__name__}")
-        print(f"- Input sequence length: {self.dataset_config['sequence_length']}")
+        print(f"- Input sequence length: {self.config['sequence_length']}")
         print(f"- Prediction length: {self.config['prediction_length']}")
-        print(f"- Window step: {self.dataset_config['window_step']}")
+        print(f"- Window step: {self.config['window_step']}")
         print(f"- Batch size: {self.batch_size}")
 
         # Get unique instance IDs from the data
         instance_ids = test_df["id_instance"].unique()
-        print(f"- Total instances: {len(instance_ids)}\n")
+        print(f"- Total instances to evaluate: {len(instance_ids)}\n")
 
         if self.model.normalizer is not None:
             norm_stats = self.model.normalizer.get_params_summary()
@@ -233,41 +239,104 @@ class Evaluate:
             )
 
         # Save metrics to enable offline analysis
-        self._save_metrics()
+        overall_metrics = self._calculate_overall_metrics()
+        self.overall_metrics = overall_metrics
+        self._save_metrics(self.output_dir, instance_info_df)
 
         return self.segmented_metrics
 
-    def _save_metrics(self) -> None:
+    def _load_full_config(self, work_dir: str) -> Dict[str, Any]:
         """
-        Save metrics to JSON files for external analysis and reporting.
+        Load the full configuration from config.yaml to include in the output metrics.
 
-        The separation into overall and instance-specific files helps with
-        both aggregate analysis and detailed examination of problematic instances.
+        Args:
+            work_dir: Working directory containing the config file
+
+        Returns:
+            Dictionary containing all configuration sections
         """
-        # Convert predictions and targets to CPU NumPy only when saving to disk
-        result_dict = {}
+        config_path = os.path.join(work_dir, "config.yaml")
+        try:
+            with open(config_path, "r") as file:
+                full_config = yaml.safe_load(file)
 
-        for instance_id, results in self.prediction_results.items():
-            # Convert tensors to CPU then NumPy arrays for JSON serialization
-            result_dict[str(instance_id)] = [
-                (target.cpu().numpy().tolist(), pred.cpu().numpy().tolist())
-                for target, pred in results
-            ]
+            # Convert any numpy or torch types to Python native types for JSON serialization
+            def convert_to_serializable(obj):
+                if isinstance(obj, (np.integer, np.floating, np.bool_)):
+                    return obj.item()
+                elif isinstance(obj, np.ndarray):
+                    return convert_to_serializable(obj.tolist())
+                elif isinstance(obj, list):
+                    return [convert_to_serializable(item) for item in obj]
+                elif isinstance(obj, dict):
+                    return {
+                        key: convert_to_serializable(value)
+                        for key, value in obj.items()
+                    }
+                elif isinstance(obj, date):
+                    return obj.isoformat()
+                else:
+                    return obj
 
-        # Save prediction results
-        with open(os.path.join(self.output_dir, "predictions.json"), "w") as f:
-            json.dump(result_dict, f)
+            return convert_to_serializable(full_config)
 
-        # Save metrics (already in correct format)
-        overall_metrics = self._calculate_overall_metrics()
-        with open(os.path.join(self.output_dir, "overall_metrics.json"), "w") as f:
-            json.dump(overall_metrics, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not load full config: {str(e)}")
+            return {}
 
-        # Save per-instance metrics (convert keys to strings for JSON)
-        with open(os.path.join(self.output_dir, "instance_metrics.json"), "w") as f:
-            json.dump(
-                {str(k): v for k, v in self.segmented_metrics.items()}, f, indent=2
-            )
+    def _save_metrics(self, output_dir, instance_info_df=None):
+        """Save metrics to JSON files."""
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Convert int64 keys to strings for JSON serialization
+        instance_metrics_string_keys = {
+            str(k): v for k, v in self.segmented_metrics.items()
+        }
+
+        # Save per-instance metrics
+        instance_metrics_file = os.path.join(output_dir, "instance_metrics.json")
+        with open(instance_metrics_file, "w") as f:
+            json.dump(instance_metrics_string_keys, f, indent=2)
+
+        # Save overall metrics
+        overall_metrics_file = os.path.join(output_dir, "overall_metrics.json")
+        with open(overall_metrics_file, "w") as f:
+            json.dump(self.overall_metrics, f, indent=2)
+
+        # Create new combined metrics file if instance_info_df is provided
+        if instance_info_df is not None:
+            # Get the full configuration
+            work_dir = os.path.dirname(output_dir)
+            full_config = self._load_full_config(work_dir)
+
+            combined_metrics = {
+                "overall_metrics": self.overall_metrics,
+                "config": full_config,  # Add configuration to the output
+                "instances": {},
+            }
+
+            # For each instance, add metadata and metrics
+            for instance_id, metrics_list in self.segmented_metrics.items():
+                try:
+                    # Get instance properties
+                    instance_props = instance_info_df.loc[instance_id].to_dict()
+
+                    # Add to combined metrics
+                    combined_metrics["instances"][str(instance_id)] = {
+                        "metadata": {"instance_id": str(instance_id), **instance_props},
+                        "metrics": metrics_list,
+                    }
+                except KeyError:
+                    # Skip if instance not found in instance_info_df
+                    print(
+                        f"Warning: Instance {instance_id} not found in instance_info_df"
+                    )
+
+            # Save combined JSON file
+            combined_file = os.path.join(output_dir, "dashboard_metrics.json")
+            with open(combined_file, "w") as f:
+                json.dump(combined_metrics, f, indent=2)
 
     def _calculate_overall_metrics(self) -> Dict[str, Any]:
         """
@@ -323,10 +392,29 @@ class Evaluate:
             List of metric dictionaries for each segment
         """
         significance_threshold = self.config["significance_threshold"]
-        decision_window = self.config["decision_window"]
+        decision_window = self.config["prediction_length"]
         # Stack to create batched tensors
         pred_tensor = torch.stack(predictions)
         target_tensor = torch.stack(targets)
+
+        # Calculate whole-sequence metrics before segmentation
+        # These metrics evaluate the entire prediction, not just windows
+        sig_accuracy = calculate_significant_trend_accuracy(
+            pred_tensor, target_tensor, significance_threshold
+        )
+        cost_savings = calculate_spot_price_savings(
+            pred_tensor, target_tensor, decision_window
+        )
+        # Calculate the perfect information savings (theoretical maximum)
+        perfect_savings = calculate_perfect_information_savings(
+            target_tensor, decision_window
+        )
+
+        # Calculate savings efficiency (what percentage of perfect savings is achieved)
+        if perfect_savings > 0:
+            savings_efficiency = (cost_savings / perfect_savings) * 100
+        else:
+            savings_efficiency = 100.0 if cost_savings == 0 else 0.0
 
         n_segments = pred_tensor.shape[1] // n_timesteps
         metrics = []
@@ -348,28 +436,15 @@ class Evaluate:
             # MAPE - mean absolute percentage error
             mape_values = abs_diff / abs_targets
 
-            # Calculate significant trend accuracy
-            sig_accuracy = calculate_significant_trend_accuracy(
-                predictions, targets, significance_threshold
-            )
-
-            # Calculate EC2 cost optimization savings for the whole window
-            # This is used for non-segmented evaluation cases
-            cost_savings = calculate_spot_price_savings(
-                predictions, targets, decision_window
-            )
-
             # Convert results to Python types for JSON serialization
             segment_metrics = {
                 "n_timestep": start,
                 "mape": float(torch.mean(mape_values).item() * 100),
-                "rmse": float(
-                    torch.sqrt(
-                        torch.mean((pred_segments - target_segments) ** 2)
-                    ).item()
-                ),
-                "sig_accuracy": sig_accuracy,
+                "mse": float(torch.mean((pred_segments - target_segments) ** 2).item()),
+                "sgnif_trend_acc": sig_accuracy,
                 "cost_savings": cost_savings,
+                "perfect_savings": perfect_savings,
+                "savings_efficiency": float(savings_efficiency),
             }
 
             metrics.append(segment_metrics)

@@ -16,10 +16,14 @@ class TrainingHistory:
     learning_rates: List[float] = field(default_factory=list)
     grad_norms: List[float] = field(default_factory=list)
     epoch_duration: List[float] = field(default_factory=list)
-    
+
     # Dynamic metrics storage
-    train_metrics: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
-    val_metrics: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
+    train_metrics: Dict[str, List[float]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    val_metrics: Dict[str, List[float]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
 
 
 @dataclass
@@ -104,7 +108,9 @@ class MetricsTracker:
 
         # Record all training metrics dynamically
         for key, value in train_metrics.items():
-            if key != "learning_rate" and key != "grad_norm":  # Already tracked separately
+            if (
+                key != "learning_rate" and key != "grad_norm"
+            ):  # Already tracked separately
                 self._history.train_metrics[key].append(value)
 
         # Record validation metrics if available
@@ -166,10 +172,10 @@ class MetricsTracker:
         """
         # Create an ordered dictionary with loss first, then other metrics
         display_metrics = {}
-        
+
         # Add loss first so it appears at the beginning
         display_metrics["loss"] = f"{loss.item():.6f}"
-        
+
         # Then add remaining metrics
         for key, value in metrics.items():
             display_metrics[key] = (
@@ -181,39 +187,34 @@ class MetricsTracker:
     def print_header(self, metrics_keys=None) -> None:
         """
         Prints the header row for training progress display with dynamic metric names.
-        
+
         Args:
             metrics_keys: Optional list of metric names to display in header
         """
         # Store keys for later use in print_epoch_stats
         if metrics_keys:
             self._store_metric_keys(metrics_keys)
-            
+
         # Create columns for basic metrics
-        header = [
-            f"{'Epoch':^8}",
-            f"{'Train Loss':^14}",
-            f"{'Val Loss':^14}"
-        ]
-        
+        header = [f"{'Epoch':^8}", f"{'Train Loss':^14}", f"{'Val Loss':^14}"]
+
         # Add dynamic metric columns
         if metrics_keys:
             for metric in metrics_keys:
                 header.append(f"{metric:^12}")
         else:
             header.append(f"{'Metrics':^30}")
-        
+
         # Add remaining columns
-        header.extend([
-            f"{'LR':^10}",
-            f"{'Duration':^8}"
-        ])
-        
+        header.extend([f"{'LR':^10}", f"{'Duration':^8}"])
+
         # Print the header row
         print(" | ".join(header))
-        
+
         # Calculate total width and print the separator line
-        total_width = sum(len(col) for col in header) + (len(header) - 1) * 3  # 3 spaces for " | "
+        total_width = (
+            sum(len(col) for col in header) + (len(header) - 1) * 3
+        )  # 3 spaces for " | "
         print("-" * total_width)
 
     def print_epoch_stats(self) -> None:
@@ -224,15 +225,20 @@ class MetricsTracker:
         # Format base values
         epoch_str = f"{self._epoch:^8d}"
         train_loss_str = f"{self._train_loss:^14.6f}"
-        val_loss_str = f"{self._val_loss:^14.6f}" if self._val_loss is not None else f"{'N/A':^14}"
-        
+        val_loss_str = (
+            f"{self._val_loss:^14.6f}" if self._val_loss is not None else f"{'N/A':^14}"
+        )
+
         # Format metrics
         metric_parts = []
-        relevant_metrics = {k: v for k, v in self._train_metrics.items() 
-                          if k not in ("learning_rate", "grad_norm")}
-        
+        relevant_metrics = {
+            k: v
+            for k, v in self._train_metrics.items()
+            if k not in ("learning_rate", "grad_norm")
+        }
+
         # Get ordered metric values that match the header
-        if hasattr(self, '_metrics_keys') and self._metrics_keys:
+        if hasattr(self, "_metrics_keys") and self._metrics_keys:
             for key in self._metrics_keys:
                 if key in relevant_metrics:
                     metric_parts.append(f"{relevant_metrics[key]:^12.4f}")
@@ -244,13 +250,17 @@ class MetricsTracker:
                 metric_parts.append(f"{value:^12.4f}")
         else:
             metric_parts.append(f"{'N/A':^30}")
-        
+
         # Format learning rate and duration
         lr_str = f"{self._learning_rate:^10.1e}"
         duration_str = f"{self._epoch_duration:^8.1f}"
-        
+
         # Combine all parts and print
-        row_parts = [epoch_str, train_loss_str, val_loss_str] + metric_parts + [lr_str, duration_str]
+        row_parts = (
+            [epoch_str, train_loss_str, val_loss_str]
+            + metric_parts
+            + [lr_str, duration_str]
+        )
         print(" | ".join(row_parts))
 
     # Store metric keys for consistent display order
@@ -288,7 +298,7 @@ class MetricsTracker:
             for key, values in self._history.train_metrics.items():
                 if values:
                     metrics[f"final_{key}"] = values[-1]
-                    
+
             for key, values in self._history.val_metrics.items():
                 if values:
                     metrics[f"final_val_{key}"] = values[-1]

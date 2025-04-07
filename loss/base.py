@@ -60,10 +60,10 @@ class LossFunction(nn.Module, ABC):
     def get_metric_names(self) -> List[str]:
         """
         Returns a list of metric names this loss function calculates.
-        
+
         This method should be overridden by subclasses to provide specific metric names.
         Used by MetricsTracker to display the correct metrics in training output.
-        
+
         Returns:
             List of metric names as strings
         """

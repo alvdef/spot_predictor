@@ -26,8 +26,6 @@ def get_loss(work_dir):
     with open(f"{work_dir}/config.yaml", "r") as f:
         config = yaml.safe_load(f)
         loss_type = config["loss_config"]["loss_type"]
-        
-    print(f"Loss {loss_type} selected on config")
 
     if loss_type not in LOSS_REGISTRY:
         available_losss = ", ".join(LOSS_REGISTRY.keys())
@@ -36,7 +34,6 @@ def get_loss(work_dir):
         )
 
     loss_class: LossFunction = LOSS_REGISTRY[loss_type]
-    print(f"Using {loss_class}")
     return loss_class(work_dir)
 
 
