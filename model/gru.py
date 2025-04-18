@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
@@ -26,19 +26,6 @@ class GRU(Model):
             num_layers=config["num_layers"],
             batch_first=True,
         )
-
-        # Feature processing network (if features are used)
-        self.feature_size = config.get("feature_size", 0)
-        if self.feature_size > 0:
-            self.feature_net = nn.Sequential(
-                nn.Linear(self.feature_size, config["hidden_size"]),
-                nn.ReLU(),
-                nn.Linear(config["hidden_size"], config["hidden_size"]),
-                nn.ReLU(),
-            )
-
-            # Combining layer to merge GRU and feature outputs
-            self.combiner = nn.Linear(config["hidden_size"] * 2, config["hidden_size"])
 
         # Decoder for multi-step output
         self.decoder = nn.Linear(config["hidden_size"], config["prediction_length"])
@@ -74,7 +61,9 @@ class GRU(Model):
             nn.init.constant_(self.combiner.bias, 0.0)
 
     def forward(
-        self, x: torch.Tensor, target: Optional[torch.Tensor] = None
+        self,
+        x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through the model.
@@ -87,26 +76,14 @@ class GRU(Model):
         Returns:
             Predictions of shape (batch_size, prediction_length)
         """
-        # Handle sequence and optional features
-        if isinstance(x, tuple):
-            sequence, features = x
-        else:
-            sequence, features = x, None
+        sequence = x[0]
 
         if len(sequence.shape) == 2:
             sequence = sequence.unsqueeze(-1)  # Add feature dimension
 
         # Process through GRU encoder
         _, hidden = self.gru(sequence)
-        last_hidden = hidden[-1]  # (batch_size, hidden_size)
-
-        # Process features if available
-        if features is not None and self.feature_size > 0:
-            processed_features = self.feature_net(features)
-            combined = torch.cat([last_hidden, processed_features], dim=1)
-            final_hidden = self.combiner(combined)
-        else:
-            final_hidden = last_hidden
+        final_hidden = hidden[-1]  # (batch_size, hidden_size)
 
         # Decode to get multi-step prediction
         output = self.decoder(final_hidden)

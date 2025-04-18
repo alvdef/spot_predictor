@@ -1,6 +1,6 @@
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
-import os
+import pandas as pd
 from datetime import datetime
 import torch
 from torch.utils.data import DataLoader
@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from loss import get_loss
 from utils import get_device, load_config, MetricsTracker, CheckpointTracker
+from utils.logging_config import get_logger
 from dataset import SpotDataset, Normalizer
 from model import Model
 
@@ -27,11 +28,20 @@ class Training:
         self,
         model: Model,
         work_dir: str,
+        instance_features_df: Optional[pd.DataFrame] = None,
     ):
-        """Initialize training process for the model."""
+        """Initialize training process for the model.
+
+        Args:
+            model: The time series model to train
+            work_dir: Directory for saving model checkpoints and metrics
+            instance_features_df: Optional dataframe containing instance features
+        """
+        self.logger = get_logger(__name__)
         self.device = get_device()
         self.model = model
         self.work_dir = work_dir
+        self.instance_features_df = instance_features_df
 
         self.metrics = MetricsTracker(work_dir + "/training")
         self.checkpoints = CheckpointTracker(work_dir + "/training")
@@ -41,7 +51,7 @@ class Training:
         if prev_config:
             self.metrics.best_loss = prev_best_loss
             self.config = prev_config
-            print("Using previous configuration and model for training.")
+            self.logger.info("Using previous configuration and model for training.")
         else:
             self.config = load_config(
                 f"{work_dir}/config.yaml",
@@ -72,7 +82,7 @@ class Training:
         The normalizer is fitted per-instance but will be used with lists of instance IDs
         during training and inference to maximize batch processing efficiency.
         """
-        print("Preparing normalizer for the model...")
+        self.logger.info("Preparing normalizer for the model...")
 
         normalizer = Normalizer(device=self.device)
 
@@ -85,7 +95,7 @@ class Training:
             normalizer.fit(instance_id, price_values)
 
         stats = normalizer.get_params_summary()
-        print(f"Normalizer prepared for {stats['count']} instances")
+        self.logger.info(f"Normalizer prepared for {stats['count']} instances")
 
         self.model.attach_normalizer(normalizer)
 
@@ -97,19 +107,21 @@ class Training:
         self, dataset: SpotDataset, val_dataset: Optional[SpotDataset] = None
     ):
         """Execute the training loop for the model."""
-        print("Training Configuration:")
-        print(f"- Model: {type(self.model).__name__}")
-        print(f"- Input sequence length: {dataset.config['sequence_length']}")
-        print(f"- Prediction length: {dataset.config['prediction_length']}")
-        print(f"- Window step: {dataset.config['window_step']}")
-        print(f"- Batch size: {dataset.config['batch_size']}")
-        print(f"- Learning rate: {self.config['learning_rate']}")
-        print(f"- Max learning rate: {self.config['max_learning_rate']}")
-        print(f"- Weight decay: {self.config['weight_decay']}")
-        print(f"- Epochs: {self.config['epochs']}")
-        print(f"- Early stopping patience: {self.config['patience']}")
-        print(f"- Optimizer: {type(self.optimizer).__name__}")
-        print(f"- Loss function: {type(self.criterion).__name__}\n")
+        self.logger.info("Training Configuration:")
+        self.logger.info(f"- Model: {type(self.model).__name__}")
+        self.logger.info(
+            f"- Input sequence length: {dataset.config['sequence_length']}"
+        )
+        self.logger.info(f"- Prediction length: {dataset.config['prediction_length']}")
+        self.logger.info(f"- Window step: {dataset.config['window_step']}")
+        self.logger.info(f"- Batch size: {dataset.config['batch_size']}")
+        self.logger.info(f"- Learning rate: {self.config['learning_rate']}")
+        self.logger.info(f"- Max learning rate: {self.config['max_learning_rate']}")
+        self.logger.info(f"- Weight decay: {self.config['weight_decay']}")
+        self.logger.info(f"- Epochs: {self.config['epochs']}")
+        self.logger.info(f"- Early stopping patience: {self.config['patience']}")
+        self.logger.info(f"- Optimizer: {type(self.optimizer).__name__}")
+        self.logger.info(f"- Loss function: {type(self.criterion).__name__}")
 
         # Create data loaders - handles batch creation and shuffling
         train_loader = dataset.get_data_loader(shuffle=True)
@@ -165,15 +177,22 @@ class Training:
                 # Stop early if model isn't improving to save time
                 if should_stop:
                     self.metrics.print_early_stopping()
+                    self.logger.info("Early stopping triggered - halting training")
                     break
 
         except KeyboardInterrupt:
             # Handle user interruption gracefully
-            self._handle_interruption()
+            self.logger.warning("Training interrupted by user")
+            self.logger.info("Saving current model state...")
+
+            self.model.save()
+            self.metrics.save_to_files()
+
         except Exception as e:
             # Log any errors but still save metrics
-            print(f"\nError during training: {str(e)}")
+            self.logger.error(f"Error during training: {str(e)}", exc_info=True)
             self.metrics.save_to_files()
+            self.model.save()
             raise
 
         self.metrics.save_to_files()
@@ -238,17 +257,8 @@ class Training:
         val_metrics = defaultdict(float)
         batch_count = 0
 
-        # Determine if data is already on device (for speed optimization)
-        sample_batch = next(iter(val_loader))
-        data_on_device = sample_batch[0].device == self.device
-
         with torch.no_grad():
             for data, target in val_loader:
-                # Move data to device only if not already there
-                if not data_on_device:
-                    data = data.to(self.device, non_blocking=True)
-                    target = target.to(self.device, non_blocking=True)
-
                 # Forward pass
                 output = self.model(data)
                 loss, metrics = self.criterion(output, target)
@@ -272,17 +282,7 @@ class Training:
             "config": self.config,
         }
         self.checkpoints.save_if_best(model_state)
-
-    def _handle_interruption(self) -> None:
-        """
-        Handle user interruption gracefully by saving the current state.
-        This ensures training progress isn't lost if the user needs to stop.
-        """
-        print("\nTraining interrupted by user")
-        print("Saving current model state...")
-
-        self.model.save()
-        self.metrics.save_to_files()
+        self.logger.info(f"Saved model checkpoint with loss: {loss:.6f}")
 
     def _convert_numeric_params(self):
         """

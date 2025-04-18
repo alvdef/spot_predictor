@@ -13,7 +13,6 @@ class Seq2Seq(Model):
         "input_size",
         "num_layers",
         "prediction_length",
-        "feature_size",
         "teacher_forcing_ratio",
     ]
 
@@ -133,7 +132,9 @@ class Seq2Seq(Model):
         return context_vector, attention_weights
 
     def forward(
-        self, x: torch.Tensor, target: Optional[torch.Tensor] = None
+        self,
+        x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through the model with optional teacher forcing.
@@ -145,11 +146,12 @@ class Seq2Seq(Model):
         Returns:
             Predictions of shape (batch_size, prediction_length)
         """
+        sequence = x[0]
         teacher_forcing_ratio = self.config["teacher_forcing_ratio"]
-        batch_size = x.size(0)
+        batch_size = sequence.size(0)
 
         # Encode the input sequence
-        encoder_outputs, encoder_hidden = self.encoder(x)
+        encoder_outputs, encoder_hidden = self.encoder(sequence)
 
         # For unidirectional GRU, we can directly use the encoder hidden state for the decoder
         decoder_hidden = encoder_hidden
@@ -187,19 +189,18 @@ class Seq2Seq(Model):
             predictions[:, t] = output.squeeze(1)
 
             # Teacher forcing: decide whether to use real target or prediction
+            use_teacher_forcing = False
             if target is not None and t < self.prediction_length - 1:
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
-                if use_teacher_forcing:
-                    # Convert target value to appropriate decoder input format
-                    next_input = target[:, t].unsqueeze(1).unsqueeze(0)
-                    # Project to hidden size dimension
-                    next_input = torch.zeros(
-                        1, batch_size, self.hidden_size, device=self.device
-                    ).scatter_(2, next_input.long(), 1.0)
-                    decoder_input = next_input
-                else:
-                    # Use prediction as next input
-                    decoder_input = decoder_output
+
+            if use_teacher_forcing and target is not None:
+                # Convert target value to appropriate decoder input format
+                next_input = target[:, t].unsqueeze(1).unsqueeze(0)
+                # Project to hidden size dimension
+                next_input = torch.zeros(
+                    1, batch_size, self.hidden_size, device=self.device
+                ).scatter_(2, next_input.long(), 1.0)
+                decoder_input = next_input
             else:
                 # Use prediction as next input
                 decoder_input = decoder_output

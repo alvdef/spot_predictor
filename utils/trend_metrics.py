@@ -40,6 +40,7 @@ def calculate_significant_trend_accuracy(
 
     return sig_accuracy
 
+
 def calculate_spot_price_savings(predictions, targets, decision_window=10):
     """
     Simulate EC2 spot price task scheduling decisions and calculate cost savings.
@@ -77,17 +78,10 @@ def calculate_spot_price_savings(predictions, targets, decision_window=10):
             current_price = target_window[0].item()
             immediate_costs.append(current_price)
 
-            # Decide whether to execute now or wait based on prediction
-            # If price is predicted to increase from current, execute now
-            # Otherwise, wait for the predicted minimum
-            if torch.argmin(pred_window) == 0:
-                # Model says "execute now" - use current price
-                optimized_costs.append(current_price)
-            else:
-                # Model says "wait" - find when it suggests to execute (minimum predicted price)
-                min_idx = torch.argmin(pred_window).item()
-                # Use the actual price at that time
-                optimized_costs.append(target_window[min_idx].item())
+            # Find when the model predicts the minimum price will occur
+            min_idx = torch.argmin(pred_window).item()
+            # Use the actual price at that time (whether it's now or in the future)
+            optimized_costs.append(target_window[min_idx].item())
 
     # Calculate average percentage savings
     if len(immediate_costs) == 0 or sum(immediate_costs) == 0:

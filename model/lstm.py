@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
@@ -12,7 +12,6 @@ class LSTM(Model):
         "input_size",
         "num_layers",
         "prediction_length",
-        "feature_size",
     ]
 
     def __init__(self, work_dir: str):
@@ -26,17 +25,6 @@ class LSTM(Model):
             num_layers=config["num_layers"],
             batch_first=True,
         )
-
-        # Feature processing network (if features are used)
-        self.feature_size = config.get("feature_size", 0)
-        if self.feature_size > 0:
-            self.feature_net = nn.Sequential(
-                nn.Linear(self.feature_size, config["hidden_size"]),
-                nn.ReLU(),
-                nn.Linear(config["hidden_size"], config["hidden_size"]),
-                nn.ReLU(),
-            )
-            self.combiner = nn.Linear(config["hidden_size"] * 2, config["hidden_size"])
 
         # Decoder for multi-step output
         self.decoder = nn.Linear(config["hidden_size"], config["prediction_length"])
@@ -60,17 +48,10 @@ class LSTM(Model):
         nn.init.kaiming_normal_(self.decoder.weight, nonlinearity="linear")
         nn.init.zeros_(self.decoder.bias)
 
-        if self.feature_size > 0:
-            for m in self.feature_net.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
-                    if m.bias is not None:
-                        nn.init.zeros_(m.bias)
-            nn.init.kaiming_normal_(self.combiner.weight, nonlinearity="relu")
-            nn.init.zeros_(self.combiner.bias)
-
     def forward(
-        self, x: torch.Tensor, target: Optional[torch.Tensor] = None
+        self,
+        x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through the model.
@@ -82,27 +63,14 @@ class LSTM(Model):
         Returns:
             Predictions tensor
         """
-        # Extract sequence and features
-        if isinstance(x, tuple):
-            sequence, features = x
-        else:
-            sequence, features = x, None
+        sequence = x[0]
 
         if len(sequence.shape) == 2:
             sequence = sequence.unsqueeze(-1)
 
         # Get the last LSTM hidden state
         _, (hidden, _) = self.lstm(sequence)
-        last_hidden = hidden[-1]
-
-        # Process features if available
-        if features is not None and self.feature_size > 0:
-            processed_features = self.feature_net(features)
-            final_hidden = self.combiner(
-                torch.cat([last_hidden, processed_features], dim=1)
-            )
-        else:
-            final_hidden = last_hidden
+        final_hidden = hidden[-1]
 
         # Generate prediction
         return self.decoder(final_hidden) * self.config["output_scale"]

@@ -1,10 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional
 import seaborn as sns
 import pandas as pd
 import os
 from collections import defaultdict
+import math
 
 
 class ResultPlotter:
@@ -23,128 +24,179 @@ class ResultPlotter:
     def plot_training_history(
         self, history: Dict[str, List[float]], save: bool = True
     ) -> None:
-        """Plot training history including losses, learning rates, gradients, and model metrics."""
-        fig, axes = plt.subplots(3, 2, figsize=(15, 15))
+        """Plot training history including losses, learning rates, gradients, and all available metrics."""
+        # Extract all metric names from the history
+        metrics = self._extract_available_metrics(history)
 
-        # Plot losses, excluding extreme initial values
+        # Always include losses, learning rate, and gradient norm plots
+        num_fixed_plots = 3  # Losses, LR, Gradient Norm
+        num_metrics = len(metrics)
+
+        # Calculate grid dimensions - first determine how many additional rows we need for metrics
+        total_plots = num_fixed_plots + num_metrics
+        num_cols = 2  # Use 2 columns
+        num_rows = math.ceil(total_plots / num_cols)
+
+        # Create figure with dynamic size based on number of plots
+        fig_height = 5 * num_rows
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(15, fig_height))
+        axes = axes.flatten() if num_rows > 1 or num_cols > 1 else [axes]
+
+        # Plot 1: Loss curves (always include)
+        self._plot_loss_curves(history, axes[0])
+
+        # Plot 2: Learning rates (always include)
+        self._plot_learning_rates(history, axes[1])
+
+        # Plot 3: Gradient norms (always include)
+        self._plot_gradient_norms(history, axes[2])
+
+        # Plot the remaining metrics
+        for i, metric_name in enumerate(metrics):
+            ax_idx = i + num_fixed_plots
+            if ax_idx < len(axes):
+                self._plot_metric(history, metric_name, axes[ax_idx])
+
+        # Hide any unused axes
+        for i in range(total_plots, len(axes)):
+            axes[i].set_visible(False)
+
+        plt.tight_layout()
+        if save:
+            plt.savefig(f"{self.output_dir}/training_history.png", bbox_inches="tight")
+        plt.show()
+
+    def _extract_available_metrics(self, history: Dict) -> List[str]:
+        """Extract all available metrics from the history dictionary."""
+        metrics = []
+
+        # Extract metrics from train_metrics and val_metrics
+        if "train_metrics" in history:
+            for metric_name in history["train_metrics"].keys():
+                # Skip metrics that are plotted separately
+                if metric_name not in ("learning_rate", "grad_norm"):
+                    metrics.append(metric_name)
+
+        # Check for any metrics at the top level that aren't already handled
+        for key in history.keys():
+            if (
+                key
+                not in [
+                    "train_loss",
+                    "val_loss",
+                    "learning_rates",
+                    "grad_norms",
+                    "epoch_duration",
+                    "train_metrics",
+                    "val_metrics",
+                ]
+                and isinstance(history[key], list)
+                and len(history[key]) > 0
+                and key not in metrics
+            ):
+                metrics.append(key)
+
+        return metrics
+
+    def _get_metric_data(
+        self, history: Dict, metric_name: str, prefix: str = ""
+    ) -> np.ndarray:
+        """Get metric data with fallback to nested locations."""
+        # Try direct access first
+        if prefix + metric_name in history and len(history[prefix + metric_name]) > 0:
+            return np.array(history[prefix + metric_name])
+
+        # Try nested access under train_metrics/val_metrics
+        nested_key = "train_metrics" if prefix == "" else "val_metrics"
+        if nested_key in history and metric_name in history[nested_key]:
+            return np.array(history[nested_key][metric_name])
+
+        return np.array([])
+
+    def _plot_loss_curves(self, history: Dict, ax: plt.Axes) -> None:
+        """Plot train and validation loss curves with outlier handling."""
         train_loss = np.array(history["train_loss"])
         val_loss = np.array(history.get("val_loss", []))
 
         # Calculate reasonable loss range (excluding outliers)
-        loss_threshold = np.percentile(train_loss[~np.isnan(train_loss)], 95)
-        train_loss[train_loss > loss_threshold] = loss_threshold
+        if len(train_loss) > 0:
+            loss_threshold = np.percentile(train_loss[~np.isnan(train_loss)], 95)
+            train_loss[train_loss > loss_threshold] = loss_threshold
+            ax.plot(train_loss, label="Training Loss")
 
-        axes[0, 0].plot(train_loss, label="Training Loss")
         if len(val_loss) > 0 and not all(x is None for x in val_loss):
-            axes[0, 0].plot(val_loss, label="Validation Loss")
-        axes[0, 0].set_xlabel("Epoch")
-        axes[0, 0].set_ylabel("Loss")
-        axes[0, 0].grid(True)
-        axes[0, 0].legend()
-        axes[0, 0].set_title("Loss Curves")
+            # Apply same threshold to validation loss
+            val_loss[val_loss > loss_threshold] = loss_threshold
+            ax.plot(val_loss, label="Validation Loss")
 
-        # Plot learning rates with better y-axis range
-        lr_data = np.array(history["learning_rates"])
-        valid_lr = lr_data[~np.isnan(lr_data) & (lr_data > 0)]
-        if len(valid_lr) > 0:
-            min_lr = max(np.min(valid_lr), 1e-10)
-            max_lr = np.max(valid_lr)
-            axes[0, 1].plot(lr_data, label="Learning Rate")
-            axes[0, 1].set_xlabel("Step")
-            axes[0, 1].set_ylabel("Learning Rate")
-            axes[0, 1].set_yscale("log")
-            axes[0, 1].set_ylim(min_lr / 10, max_lr * 10)
-            axes[0, 1].grid(True)
-            axes[0, 1].legend()
-            axes[0, 1].set_title("Learning Rate")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.grid(True)
+        ax.legend()
+        ax.set_title("Loss Curves")
 
-        # Plot gradient norms with outlier removal
-        grad_norms = np.array(history["grad_norms"])
-        valid_norms = grad_norms[~np.isnan(grad_norms) & (grad_norms > 0)]
-        if len(valid_norms) > 0:
-            norm_threshold = np.percentile(valid_norms, 95)
-            grad_norms[grad_norms > norm_threshold] = norm_threshold
-            axes[1, 0].plot(grad_norms, label="Gradient Norm")
-            axes[1, 0].set_xlabel("Step")
-            axes[1, 0].set_ylabel("Gradient Norm")
-            axes[1, 0].grid(True)
-            axes[1, 0].legend()
-            axes[1, 0].set_title("Gradient Norms")
+    def _plot_learning_rates(self, history: Dict, ax: plt.Axes) -> None:
+        """Plot learning rates with log scale."""
+        if "learning_rates" in history:
+            lr_data = np.array(history["learning_rates"])
+            valid_lr = lr_data[~np.isnan(lr_data) & (lr_data > 0)]
+            if len(valid_lr) > 0:
+                min_lr = max(np.min(valid_lr), 1e-10)
+                max_lr = np.max(valid_lr)
+                ax.plot(lr_data, label="Learning Rate")
+                ax.set_xlabel("Step")
+                ax.set_ylabel("Learning Rate")
+                ax.set_yscale("log")
+                ax.set_ylim(min_lr / 10, max_lr * 10)
+                ax.grid(True)
+                ax.legend()
+                ax.set_title("Learning Rate")
 
-        # Plot cumulative epoch duration
-        if "epoch_duration" in history:
-            epoch_duration = np.array(history["epoch_duration"])
-            # Calculate cumulative duration
-            cumulative_duration = np.cumsum(epoch_duration)
+    def _plot_gradient_norms(self, history: Dict, ax: plt.Axes) -> None:
+        """Plot gradient norms with outlier removal."""
+        if "grad_norms" in history:
+            grad_norms = np.array(history["grad_norms"])
+            valid_norms = grad_norms[~np.isnan(grad_norms) & (grad_norms > 0)]
+            if len(valid_norms) > 0:
+                norm_threshold = np.percentile(valid_norms, 95)
+                grad_norms[grad_norms > norm_threshold] = norm_threshold
+                ax.plot(grad_norms, label="Gradient Norm")
+                ax.set_xlabel("Step")
+                ax.set_ylabel("Gradient Norm")
+                ax.grid(True)
+                ax.legend()
+                ax.set_title("Gradient Norms")
 
-            # Convert to hours for better readability
-            cumulative_hours = cumulative_duration / 3600
+    def _plot_metric(self, history: Dict, metric_name: str, ax: plt.Axes) -> None:
+        """Plot a specific metric with both train and validation data if available."""
+        train_metric = self._get_metric_data(history, metric_name)
+        val_metric = self._get_metric_data(history, metric_name, "val_")
 
-            axes[1, 1].plot(cumulative_hours, label="Cumulative Training Time")
-            axes[1, 1].set_xlabel("Epoch")
-            axes[1, 1].set_ylabel("Cumulative Time (hours)")
-            axes[1, 1].grid(True)
-            axes[1, 1].legend()
-            axes[1, 1].set_title("Cumulative Training Duration")
+        has_data = False
+        if len(train_metric) > 0:
+            # Handle outliers for better visualization
+            if np.std(train_metric) > np.mean(train_metric) * 10:
+                percentile_95 = np.percentile(train_metric[~np.isnan(train_metric)], 95)
+                train_metric[train_metric > percentile_95] = percentile_95
 
-            # Add annotation for total training time
-            total_time = cumulative_hours[-1]
-            axes[1, 1].annotate(
-                f"Total: {total_time:.2f} hours",
-                xy=(len(cumulative_hours) - 1, total_time),
-                xytext=(len(cumulative_hours) - 15, total_time * 0.9),
-                arrowprops=dict(arrowstyle="->"),
-            )
+            ax.plot(train_metric, label=f"Train {metric_name}")
+            has_data = True
 
-        # Function to get metric data with fallback to nested locations
-        def get_metric_data(metric_name, prefix=""):
-            # Try direct access first
-            if (
-                prefix + metric_name in history
-                and len(history[prefix + metric_name]) > 0
-            ):
-                return np.array(history[prefix + metric_name])
+        if len(val_metric) > 0:
+            # Handle outliers for better visualization
+            if np.std(val_metric) > np.mean(val_metric) * 10:
+                percentile_95 = np.percentile(val_metric[~np.isnan(val_metric)], 95)
+                val_metric[val_metric > percentile_95] = percentile_95
 
-            # Try nested access under train_metrics/val_metrics
-            nested_key = "train_metrics" if prefix == "" else "val_metrics"
-            if nested_key in history and metric_name in history[nested_key]:
-                return np.array(history[nested_key][metric_name])
+            ax.plot(val_metric, label=f"Validation {metric_name}")
+            has_data = True
 
-            return np.array([])
-
-        # Plot MSE
-        train_mse = get_metric_data("mse")
-        val_mse = get_metric_data("mse", "val_")
-
-        if len(train_mse) > 0:
-            axes[2, 0].plot(train_mse, label="Train MSE")
-            if len(val_mse) > 0:
-                axes[2, 0].plot(val_mse, label="Validation MSE")
-            axes[2, 0].set_xlabel("Epoch")
-            axes[2, 0].set_ylabel("MSE")
-            axes[2, 0].grid(True)
-            axes[2, 0].legend()
-            axes[2, 0].set_title("Mean Squared Error")
-
-        # Plot MAPE
-        train_mape = get_metric_data("mape")
-        val_mape = get_metric_data("mape", "val_")
-
-        if len(train_mape) > 0:
-            axes[2, 1].plot(train_mape, label="Train MAPE")
-            if len(val_mape) > 0:
-                axes[2, 1].plot(val_mape, label="Validation MAPE")
-            axes[2, 1].set_xlabel("Epoch")
-            axes[2, 1].set_ylabel("MAPE (%)")
-            axes[2, 1].grid(True)
-            axes[2, 1].legend()
-            axes[2, 1].set_title("Mean Absolute Percentage Error")
-
-        plt.tight_layout()
-        if save:
-            plt.savefig(f"{self.output_dir}/training_history.png")
-        else:
-            plt.show()
+        if has_data:
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel(metric_name)
+            ax.grid(True)
+            ax.legend()
+            ax.set_title(f"{metric_name.replace('_', ' ').title()}")
 
     def plot_predictions(
         self,

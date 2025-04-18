@@ -5,6 +5,8 @@ import json
 import torch
 from collections import defaultdict
 
+from .logging_config import get_logger
+
 
 @dataclass
 class TrainingHistory:
@@ -54,6 +56,7 @@ class MetricsTracker:
 
     def __post_init__(self):
         # Create output directory to ensure files can be saved later
+        self.logger = get_logger(__name__)
         os.makedirs(self.output_dir, exist_ok=True)
         self.history_path = os.path.join(self.output_dir, "training_history.json")
         self.metrics_path = os.path.join(self.output_dir, "metrics.json")
@@ -209,13 +212,16 @@ class MetricsTracker:
         header.extend([f"{'LR':^10}", f"{'Duration':^8}"])
 
         # Print the header row
-        print(" | ".join(header))
+        header_str = " | ".join(header)
+        print(header_str)
+        self.logger.info(f"Training progress tracking started:\n{header_str}")
 
         # Calculate total width and print the separator line
         total_width = (
             sum(len(col) for col in header) + (len(header) - 1) * 3
         )  # 3 spaces for " | "
-        print("-" * total_width)
+        separator = "-" * total_width
+        print(separator)
 
     def print_epoch_stats(self) -> None:
         """
@@ -261,7 +267,20 @@ class MetricsTracker:
             + metric_parts
             + [lr_str, duration_str]
         )
-        print(" | ".join(row_parts))
+        row_str = " | ".join(row_parts)
+        print(row_str)
+
+        # Also log to file with more concise format for log readability
+        log_message = f"Epoch {self._epoch}: train={self._train_loss:.6f}"
+        if self._val_loss is not None:
+            log_message += f", val={self._val_loss:.6f}"
+        if relevant_metrics:
+            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in relevant_metrics.items())
+            log_message += f", {metrics_str}"
+        log_message += (
+            f", lr={self._learning_rate:.1e}, time={self._epoch_duration:.1f}s"
+        )
+        self.logger.info(log_message)
 
     # Store metric keys for consistent display order
     def _store_metric_keys(self, metrics_keys):
@@ -270,10 +289,11 @@ class MetricsTracker:
 
     def print_early_stopping(self) -> None:
         """Prints early stopping notification."""
-        print("-" * 100)
-        print(
-            f"Early stopping triggered after {self.early_stopping_patience} epochs without improvement."
-        )
+        separator = "-" * 100
+        message = f"Early stopping triggered after {self.early_stopping_patience} epochs without improvement."
+        print(separator)
+        print(message)
+        self.logger.warning(message)
 
     def save_to_files(self) -> None:
         """
@@ -306,6 +326,12 @@ class MetricsTracker:
             with open(self.metrics_path, "w") as f:
                 json.dump(metrics, f)
 
+            self.logger.info(
+                f"Saved metrics to {self.metrics_path} and training history to {self.history_path}"
+            )
+
         except Exception as e:
             # Log the error but don't crash the program
-            print(f"Error saving metrics data: {str(e)}")
+            error_message = f"Error saving metrics data: {str(e)}"
+            print(error_message)
+            self.logger.error(error_message, exc_info=True)

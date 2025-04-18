@@ -1,5 +1,4 @@
 import os
-import logging
 from typing import Tuple
 import boto3
 import pandas as pd
@@ -8,7 +7,7 @@ from functools import lru_cache
 import glob
 import ast
 
-from utils import load_config
+from utils import load_config, get_logger
 
 
 class LoadSpotDataset:
@@ -39,12 +38,12 @@ class LoadSpotDataset:
         """
         self.config = load_config(config_path, "dataset_features", self.REQUIRED_FIELDS)
         self.data_dir = os.path.join("data")
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         try:
             self.s3 = boto3.client("s3")
         except Exception as e:
-            print(f"Failed to initialize S3 client: {str(e)}")
+            self.logger.error(f"Failed to initialize S3 client: {str(e)}")
             raise
 
     @lru_cache(maxsize=32)
@@ -59,29 +58,32 @@ class LoadSpotDataset:
         """
         try:
             if not os.path.exists(self.data_dir):
-                print(f"{self.data_dir} does not exist. Downloading files from S3...")
+                self.logger.warning(
+                    f"{self.data_dir} does not exist. Downloading files from S3..."
+                )
                 self._download_files()
 
             prices_dfs = []
             instance_info_dfs = []
 
             for region in self.config["regions"]:
-                print(f"Loading info from {region}")
+                self.logger.info(f"Loading info from {region}")
                 # Load instance info
                 region_instance_info_df = self.read_instance_info(region)
                 if not region_instance_info_df.empty:
-                    print(f"Loaded instance info for {region}")
+                    self.logger.info(f"Loaded instance info for {region}")
                     instance_info_dfs.append(region_instance_info_df)
 
                 # Load prices
                 region_prices_df = self.read_prices_files(region)
                 if not region_prices_df.empty:
-                    print(f"Loaded prices for {region}")
+                    self.logger.info(f"Loaded prices for {region}")
                     prices_dfs.append(region_prices_df)
 
             if not prices_dfs or not instance_info_dfs:
-                # Print diagnostic information about the filters
-                print("No instances matched the specified filters. Debug information:")
+                self.logger.warning(
+                    "No instances matched the specified filters. Debug information:"
+                )
 
             # Combine data
             prices_df = pd.concat(prices_dfs, ignore_index=True)
@@ -97,7 +99,7 @@ class LoadSpotDataset:
             return prices_df, instance_info_df
 
         except Exception as e:
-            print(f"Failed to load data: {str(e)}")
+            self.logger.error(f"Failed to load data: {str(e)}")
             raise
 
     def get_training_validation_test_split(
@@ -120,7 +122,7 @@ class LoadSpotDataset:
             return train_df, val_df, test_df
 
         except Exception as e:
-            print(f"Failed to split data: {str(e)}")
+            self.logger.error(f"Failed to split data: {str(e)}")
             raise
 
     def read_instance_info(self, region: str) -> pd.DataFrame:
@@ -144,17 +146,14 @@ class LoadSpotDataset:
                 lambda x: ast.literal_eval(x) if isinstance(x, str) else x
             )
 
-            # Inspect unique values in 'architectures' column
-            print(
-                f"Unique architectures: {instance_info_df['architectures'].explode().unique()}"
-            )
-
             if "instance_filters" in self.config:
                 filters = self.config.get("instance_filters", {})
-                print(f"Filters being applied: {filters}")  # Print all filters
+                self.logger.info(
+                    f"Filters being applied: {filters}"
+                )  # Self.logger.info all filters
 
                 if "instance_family" in filters and filters["instance_family"]:
-                    print(
+                    self.logger.info(
                         f"Applying instance_family filter: {filters['instance_family']}"
                     )
                     instance_info_df = instance_info_df[
@@ -162,12 +161,14 @@ class LoadSpotDataset:
                             filters["instance_family"]
                         )
                     ]
-                    print(
+                    self.logger.info(
                         f"Instances after instance_family filter: {len(instance_info_df)}"
                     )
 
                 if "architectures" in filters and filters["architectures"]:
-                    print(f"Applying architectures filter: {filters['architectures']}")
+                    self.logger.info(
+                        f"Applying architectures filter: {filters['architectures']}"
+                    )
                     instance_info_df = instance_info_df[
                         instance_info_df["architectures"].apply(
                             lambda x: any(
@@ -175,28 +176,34 @@ class LoadSpotDataset:
                             )
                         )
                     ]
-                    print(
+                    self.logger.info(
                         f"Instances after architectures filter: {len(instance_info_df)}"
                     )
 
                 if "generation" in filters and filters["generation"]:
-                    print(f"Applying generation filter: {filters['generation']}")
+                    self.logger.info(
+                        f"Applying generation filter: {filters['generation']}"
+                    )
                     instance_info_df = instance_info_df[
                         instance_info_df["generation"]
                         .astype(str)
                         .isin([str(g) for g in filters["generation"]])
                     ]
-                    print(f"Instances after generation filter: {len(instance_info_df)}")
+                    self.logger.info(
+                        f"Instances after generation filter: {len(instance_info_df)}"
+                    )
 
                 if "size" in filters and filters["size"]:
-                    print(f"Applying size filter: {filters['size']}")
+                    self.logger.info(f"Applying size filter: {filters['size']}")
                     instance_info_df = instance_info_df[
                         instance_info_df["size"].isin(filters["size"])
                     ]
-                    print(f"Instances after size filter: {len(instance_info_df)}")
+                    self.logger.info(
+                        f"Instances after size filter: {len(instance_info_df)}"
+                    )
 
                 if "product_description" in filters and filters["product_description"]:
-                    print(
+                    self.logger.info(
                         f"Applying product_description filter: {filters['product_description']}"
                     )
                     product_descriptions = filters["product_description"]
@@ -205,31 +212,35 @@ class LoadSpotDataset:
                             product_descriptions
                         )
                     ]
-                    print(
+                    self.logger.info(
                         f"Instances after product_description filter: {len(instance_info_df)}"
                     )
 
                 if "instance_type" in filters and filters["instance_type"]:
-                    print(f"Applying instance_type filter: {filters['instance_type']}")
+                    self.logger.info(
+                        f"Applying instance_type filter: {filters['instance_type']}"
+                    )
                     instance_info_df = instance_info_df[
                         instance_info_df["instance_type"].isin(filters["instance_type"])
                     ]
-                    print(
+                    self.logger.info(
                         f"Instances after instance_type filter: {len(instance_info_df)}"
                     )
 
                 if "metal" in filters and not filters["metal"]:
-                    print(f"Applying metal filter: {filters['metal']}")
+                    self.logger.info(f"Applying metal filter: {filters['metal']}")
                     instance_info_df = instance_info_df[
                         ~instance_info_df["size"].str.contains(
                             "metal", case=False, na=False
                         )
                     ]
-                    print(f"Instances after metal filter: {len(instance_info_df)}")
+                    self.logger.info(
+                        f"Instances after metal filter: {len(instance_info_df)}"
+                    )
 
             return instance_info_df
         except Exception as e:
-            print(f"Failed to read instance info for {region}: {str(e)}")
+            self.logger.error(f"Failed to read instance info for {region}: {str(e)}")
             return pd.DataFrame()
 
     def read_prices_files(self, region: str) -> pd.DataFrame:
@@ -262,7 +273,7 @@ class LoadSpotDataset:
 
             return prices_df
         except Exception as e:
-            print(f"Failed to read prices for {region}: {str(e)}")
+            self.logger.error(f"Failed to read prices for {region}: {str(e)}")
             return pd.DataFrame()
 
     def _download_files(self) -> None:
@@ -277,18 +288,18 @@ class LoadSpotDataset:
             regions = self.config["regions"]
 
             if not os.path.exists(self.data_dir):
-                print(
+                self.logger.warning(
                     f"Data directory {self.data_dir} does not exist. Creating it and downloading all files..."
                 )
                 os.makedirs(self.data_dir)
             else:
-                print("Data directory exists, checking for latest files...")
+                self.logger.info("Data directory exists, checking for latest files...")
 
             earliest_date = self._find_earliest_date_across_regions(regions)
             self._download_files_from_s3(bucket_name, regions, earliest_date)
 
         except Exception as e:
-            print(f"Failed to download files: {str(e)}")
+            self.logger.error(f"Failed to download files: {str(e)}")
             raise
 
     def _find_earliest_date_across_regions(self, regions):
@@ -322,11 +333,11 @@ class LoadSpotDataset:
                     # Track the minimum end date - we need all files from this date onward
                     if earliest_date is None or end_date < earliest_date:
                         earliest_date = end_date
-                        print(
+                        self.logger.info(
                             f"Latest file for {region}: {file_name}, end date: {end_date}"
                         )
             except Exception as e:
-                print(f"Error processing files for {region}: {e}")
+                self.logger.error(f"Error processing files for {region}: {e}")
 
         return earliest_date
 
@@ -342,11 +353,11 @@ class LoadSpotDataset:
             earliest_date: Earliest date to download files from, or None for all files
         """
         if earliest_date:
-            print(
+            self.logger.info(
                 f"Downloading files from {earliest_date} onwards and all instance info files..."
             )
         else:
-            print("Downloading all files for specified regions...")
+            self.logger.info("Downloading all files for specified regions...")
 
         # Track regions with instance_info files to detect missing ones
         instance_info_downloaded = set()
@@ -382,8 +393,8 @@ class LoadSpotDataset:
         # Alert if any regions are missing instance info
         missing_regions = set(regions) - instance_info_downloaded
         if missing_regions:
-            print(
-                f"WARNING: Could not find instance_info files for regions: {missing_regions}"
+            self.logger.warning(
+                f"Could not find instance_info files for regions: {missing_regions}"
             )
 
     def _should_download_file(self, key, earliest_date):
@@ -426,7 +437,7 @@ class LoadSpotDataset:
         local_path = os.path.join(self.data_dir, key)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         self.s3.download_file(bucket_name, key, local_path)
-        print(f"Downloaded {key}")
+        self.logger.info(f"Downloaded {key}")
 
     def _validate_loaded_data(
         self, prices_df: pd.DataFrame, instance_info_df: pd.DataFrame
@@ -463,26 +474,6 @@ class LoadSpotDataset:
         prices_df = prices_df.dropna(subset=[self.config["target_col"]])
 
         return prices_df
-
-    def _add_time_features(self, df: pd.DataFrame, time_col: str, hours_in_day=24):
-        def create_cyclical_features(values, period):
-            """Convert cyclical features to sin/cos components"""
-            values = values * 2 * np.pi / period
-            return np.cos(values), np.sin(values)
-
-        time_features = {
-            "hour": (df[time_col].dt.hour, hours_in_day),
-            "dayofweek": (df[time_col].dt.dayofweek, 7),
-            "dayofmonth": (df[time_col].dt.day, df[time_col].dt.daysinmonth),
-            "dayofyear": (df[time_col].dt.dayofyear, 365),
-        }
-
-        for feature, (values, period) in time_features.items():
-            if feature in self.config.get("time_features", []):
-                df[f"{feature}_cos"], df[f"{feature}_sin"] = create_cyclical_features(
-                    values, period
-                )
-        return df
 
     def _generate_complete_time_df(self, id_instances: np.ndarray) -> pd.DataFrame:
         complete_time_range = pd.date_range(

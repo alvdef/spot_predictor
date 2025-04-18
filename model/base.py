@@ -5,7 +5,7 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 
 from dataset import Normalizer
-from utils import get_device, load_config
+from utils import get_device, load_config, predict_future_time_features
 
 
 class Model(nn.Module, ABC):
@@ -25,9 +25,6 @@ class Model(nn.Module, ABC):
         forecast(sequence, n_steps, instance_id=None):
             Generate recursive predictions for a specified number of steps ahead.
 
-        predict(x):
-            Makes a single forward pass through the model.
-
         save(path):
             Save model weights and normalizer parameters.
 
@@ -46,6 +43,10 @@ class Model(nn.Module, ABC):
         self.config = load_config(
             f"{work_dir}/config.yaml", "model_config", self.__class__.REQUIRED_FIELDS
         )
+        self.time_features = load_config(
+            f"{work_dir}/config.yaml", "dataset_config", ["time_features"]
+        )["time_features"]
+
         self._build_model(self.config)
         self.initialized = True
 
@@ -71,141 +72,100 @@ class Model(nn.Module, ABC):
     @abstractmethod
     def forward(
         self,
-        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+        x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass through the model.
 
         Args:
-            x: Either:
-               - A sequence tensor
-               - A tuple (sequence, features) where:
-                 sequence: Input tensor of shape (batch_size, seq_len, input_size)
-                 features: Additional features tensor of shape (batch_size, feature_size)
+            x: A tuple containing sequence and additional feature tensors (sequence, instance_features, time_features)
             target: Optional target tensor for models that use teacher forcing
 
         Returns:
-            Output tensor
+            Output tensor with predictions
         """
         pass
 
     @torch.no_grad()
-    def predict(
-        self,
-        x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-        instance_ids: Optional[List[int]] = None,
-    ) -> torch.Tensor:
-        """
-        Make predictions with a single forward pass (no recursion).
-
-        Args:
-            x: Either:
-               - A sequence tensor
-               - A tuple (sequence, features) where:
-                 sequence: Input tensor
-                 features: Additional features tensor
-            instance_ids: Instance ID(s) for normalization
-
-        Returns:
-            Predictions tensor
-        """
-        self.eval()
-        # Handle sequence and features separately for normalization
-        if isinstance(x, tuple):
-            sequence, features = x
-            if self.normalizer is not None and instance_ids is not None:
-                sequence = self.normalizer.normalize(sequence, instance_ids)
-            x = (sequence, features)
-        else:
-            if self.normalizer is not None and instance_ids is not None:
-                x = self.normalizer.normalize(x, instance_ids)
-
-        predictions = self.forward(x)
-
-        if self.normalizer is not None and instance_ids is not None:
-            predictions = self.normalizer.denormalize(predictions, instance_ids)
-
-        return predictions
-
-    @torch.no_grad()
     def forecast(
         self,
-        sequence: torch.Tensor,
+        sequence_input: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         n_steps: int,
-        instance_ids: Optional[List[int]] = None,
-        features: Optional[torch.Tensor] = None,
+        instance_ids: List[int],
     ) -> torch.Tensor:
         """
-        Generate recursive predictions for n_steps ahead by using predict.
+        Generate recursive predictions for n_steps ahead.
 
         Args:
-            sequence: Input sequence tensor with shape either:
-                      - (sequence_length,) - single sequence, will be treated as batch_size=1
-                      - (batch_size, sequence_length) - batch of sequences of the same length
+            sequence_input: A tuple containing (sequence, instance_features, time_features)
             n_steps: Number of steps to predict
-            instance_ids: Instance ID(s) for normalization, can be:
-                          - A single integer ID (applied to all sequences)
-                          - A list of integer IDs (one per sequence)
-            features: Additional features tensor of shape (batch_size, feature_size)
+            instance_ids: A list of integer IDs (one per sequence)
 
         Returns:
             Predictions tensor of shape (batch_size, n_steps)
         """
         self.eval()
 
+        sequence, instance_features, time_features = sequence_input
+
         if not isinstance(sequence, torch.Tensor):
             raise TypeError("sequence must be a torch.Tensor")
 
-        if instance_ids is not None and not isinstance(instance_ids, list):
-            raise TypeError(
-                "instance_ids must be either an int, a list of ints, or None"
-            )
+        # Add batch dimension if missing
+        if len(sequence.shape) == 1:
+            sequence = sequence.unsqueeze(0)
 
-        if isinstance(instance_ids, list) and len(instance_ids) != sequence.shape[0]:
-            raise ValueError(
-                f"Length of instance_ids list ({len(instance_ids)}) must match batch size ({sequence.shape[0]})"
-            )
-
-        if len(sequence.shape) == 1:  # Single sequence without batch dimension
-            sequence = sequence.unsqueeze(0)  # Add batch dimension
-
+        # Validate batch size matches instance_ids
         batch_size = sequence.shape[0]
-        seq_len = sequence.shape[1]
-        prediction_length = self.config.get("prediction_length", 1)
+        if len(instance_ids) != batch_size:
+            raise ValueError(
+                f"Length of instance_ids ({len(instance_ids)}) must match batch size ({batch_size})"
+            )
 
+        seq_len = sequence.shape[1]
+        prediction_length = self.config["prediction_length"]
+        
+        # Initialize output predictions tensor
         predictions = torch.zeros((batch_size, n_steps), device=self.device)
+        
         current_sequence = sequence.clone()
+        current_time_features = time_features.clone()
 
         steps_done = 0
         while steps_done < n_steps:
-            # Prepare input for predict method
-            model_input = (
-                (current_sequence, features)
-                if features is not None
-                else current_sequence
-            )
-
-            output = self.predict(model_input, instance_ids)
+            if self.normalizer:
+                current_sequence = self.normalizer.normalize(current_sequence, instance_ids)
+                
+            model_input = (current_sequence, instance_features, current_time_features)
+            output = self.forward(model_input)
+            
+            if self.normalizer:
+                output = self.normalizer.denormalize(output, instance_ids)
 
             steps_to_use = min(prediction_length, n_steps - steps_done)
-            predictions[:, steps_done : steps_done + steps_to_use] = output[
-                :, :steps_to_use
-            ]
-
+            
+            predictions[:, steps_done:steps_done + steps_to_use] = output[:, :steps_to_use]
             steps_done += steps_to_use
+            
+            if steps_done >= n_steps:
+                break
 
-            if steps_done < n_steps:
-                new_values = output[:, :steps_to_use].unsqueeze(-1)
-
-                if seq_len > steps_to_use:
-                    current_sequence = torch.cat(
-                        [current_sequence[:, steps_to_use:, :], new_values], dim=1
-                    )
-                else:
-                    current_sequence = torch.cat(
-                        [current_sequence[:, steps_to_use:, :], new_values], dim=1
-                    )[:, -seq_len:, :]
+            current_sequence = torch.cat(
+                [
+                    current_sequence[:, steps_to_use:],  # Remove oldest steps
+                    output[:, :steps_to_use].unsqueeze(2),  # Add new predictions
+                ],
+                dim=1,
+            )[:, -seq_len:]  # Ensure sequence length remains constant
+            
+            # Generate time features for the next prediction window
+            current_time_features = predict_future_time_features(
+                current_time_features,
+                self.time_features,
+                self.config["timestep_hours"],
+                prediction_length,
+            )
 
         return predictions
 

@@ -2,7 +2,8 @@ from typing import Dict, Optional, List, Any
 import torch
 import json
 import os
-import logging
+
+from utils import get_logger
 
 
 class Normalizer:
@@ -15,7 +16,7 @@ class Normalizer:
         """Initialize normalizer with optional device placement."""
         self.params: Dict[int, Dict[str, float]] = {}
         self.device = device
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def fit(self, instance_id: int, values: torch.Tensor) -> "Normalizer":
         """

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
-from utils.config import load_config
+from utils import load_config
 
 
 class LossFunction(nn.Module, ABC):
@@ -57,6 +57,7 @@ class LossFunction(nn.Module, ABC):
         """
         return " | ".join([f"{key}: {value:.4f}" for key, value in metrics.items()])
 
+    @abstractmethod
     def get_metric_names(self) -> List[str]:
         """
         Returns a list of metric names this loss function calculates.

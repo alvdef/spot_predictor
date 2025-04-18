@@ -2,6 +2,8 @@ from typing import Dict, Optional, Tuple
 import os
 import torch
 
+from .logging_config import get_logger
+
 
 def get_device() -> torch.device:
     if torch.cuda.is_available():
@@ -19,6 +21,7 @@ class CheckpointTracker:
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
         self.device = get_device()
+        self.logger = get_logger(__name__)
 
     def save_if_best(self, model_state: Dict) -> None:
         """Save checkpoint if metrics have improved."""
@@ -59,18 +62,18 @@ class CheckpointTracker:
             checkpoint_state = checkpoint["model_state_dict"]
 
             if not self._architectures_compatible(current_state, checkpoint_state):
-                print(
-                    "Warning: Checkpoint architecture incompatible with current model."
+                self.logger.warning(
+                    "Checkpoint architecture incompatible with current model."
                 )
                 return checkpoint.get("config", None), float("inf")
 
             # Load weights if compatible
             model.load_state_dict(checkpoint_state)
-            print("Successfully loaded checkpoint.")
+            self.logger.info("Successfully loaded checkpoint.")
             return checkpoint.get("config", None), checkpoint.get("loss", float("inf"))
 
         except Exception as e:
-            print(f"Warning: Error loading checkpoint - {str(e)}")
+            self.logger.warning(f"Error loading checkpoint - {str(e)}")
             return None, float("inf")
 
     def _architectures_compatible(
