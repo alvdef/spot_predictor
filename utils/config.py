@@ -14,36 +14,15 @@ def _derive_sequence_parameters(config: Dict[str, Any]) -> Dict[str, Dict[str, A
     timestep_hours = seq_config["timestep_hours"]
     steps_per_day = hours_per_day // timestep_hours
 
-    derived["dataset_features"] = {
+    derived = {
         "timestep_hours": timestep_hours,
-        **(config["dataset_features"] if "dataset_features" in config else {}),
-    }
-
-    derived["dataset_config"] = {
-        "sequence_length": int(
-            round(seq_config["sequence_length_days"] * steps_per_day)
+        "sequence_length": round(seq_config["sequence_length_days"] * steps_per_day),
+        "window_step": round(seq_config["window_step_days"] * steps_per_day),
+        "tr_prediction_length": round(seq_config["model_pred_days"] * steps_per_day),
+        "n_timesteps_metrics": round(seq_config["evaluation_days"] * steps_per_day),
+        "prediction_length": round(
+            seq_config["prediction_length_days"] * steps_per_day
         ),
-        "window_step": int(round(seq_config["window_step_days"] * steps_per_day)),
-        "prediction_length": int(round(seq_config["model_pred_days"] * steps_per_day)),
-        **(config["dataset_config"] if "dataset_config" in config else {}),
-    }
-
-    model_config = config["model_config"].copy() if "model_config" in config else {}
-    model_config["prediction_length"] = derived["dataset_config"]["prediction_length"]
-    derived["model_config"] = model_config
-
-    derived["evaluate_config"] = {
-        "n_timesteps_metrics": int(
-            round(seq_config["evaluation_days"] * steps_per_day)
-        ),
-        "sequence_length": int(
-            round(seq_config["sequence_length_days"] * steps_per_day)
-        ),
-        "window_step": int(round(seq_config["window_step_days"] * steps_per_day)),
-        "prediction_length": int(
-            round(seq_config["prediction_length_days"] * steps_per_day)
-        ),
-        **(config["evaluate_config"] if "evaluate_config" in config else {}),
     }
 
     return derived
@@ -94,8 +73,7 @@ def load_config(config_path: str, config_key: str, required_fields: list[str]) -
                 ).replace(tzinfo=timezone.utc)
 
     derived_configs = _derive_sequence_parameters(full_config)
-    if config_key in derived_configs:
-        config = {**config, **derived_configs[config_key]}
+    config = {**config, **derived_configs}
 
     # Validate required fields
     for field in required_fields:

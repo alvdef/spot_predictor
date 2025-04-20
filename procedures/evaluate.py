@@ -2,13 +2,11 @@ from typing import List, Dict, Tuple, DefaultDict, Optional, Any
 import os
 import json
 import torch
-import numpy as np
-import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
 import yaml
 from datetime import date
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from utils import (
     calculate_significant_trend_accuracy,
@@ -30,7 +28,6 @@ class Evaluate:
         "significance_threshold",
         "sequence_length",
         "window_step",
-        "prediction_length",
     ]
 
     def __init__(self, model: Model, dataset: SpotDataset, work_dir: str):
@@ -105,7 +102,7 @@ class Evaluate:
                 predictions = self.model.forecast(
                     inputs,
                     self.config["prediction_length"],
-                    [instance_id] * self.batch_size,
+                    [instance_id] * inputs[0].shape[0],
                 )
 
                 all_targets.append(targets)
@@ -120,9 +117,6 @@ class Evaluate:
             # Return pairs of targets and predictions
             return [(targets[i], predictions[i]) for i in range(len(targets))]
 
-        except ValueError as e:
-            self.logger.warning(f"No data found for instance {instance_id}: {str(e)}")
-            return []
         except Exception as e:
             self.logger.error(
                 f"Error evaluating instance {instance_id}: {str(e)}", exc_info=True
@@ -185,6 +179,8 @@ class Evaluate:
             self.logger.info(
                 f"{len(self.failed_instances)} instances had insufficient data for evaluation"
             )
+
+        self.save_metrics()
 
         return self.segmented_metrics
 

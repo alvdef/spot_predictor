@@ -100,10 +100,8 @@ class TrendFocusLoss(LossFunction):
             "trend_loss": trend_loss.item(),
             "mape": mape.item(),
             "sig_trnd_acc": sig_trend_acc,
-            "cost_sav": cost_savings if "cost_sav" in locals() else 0.0,
-            "sav_effi": (
-                savings_efficiency if "sav_effi" in locals() else 0.0
-            ),
+            "cost_sav": cost_savings,
+            "sav_effi": savings_efficiency,
         }
 
         return combined_loss, metrics

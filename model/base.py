@@ -47,6 +47,10 @@ class Model(nn.Module, ABC):
             f"{work_dir}/config.yaml", "dataset_config", ["time_features"]
         )["time_features"]
 
+        self.timestep_hours = load_config(
+            f"{work_dir}/config.yaml", "sequence_config", ["timestep_hours"]
+        )["timestep_hours"]
+
         self._build_model(self.config)
         self.initialized = True
 
@@ -125,47 +129,58 @@ class Model(nn.Module, ABC):
 
         seq_len = sequence.shape[1]
         prediction_length = self.config["prediction_length"]
-        
+
         # Initialize output predictions tensor
         predictions = torch.zeros((batch_size, n_steps), device=self.device)
-        
         current_sequence = sequence.clone()
         current_time_features = time_features.clone()
 
         steps_done = 0
         while steps_done < n_steps:
-            if self.normalizer:
-                current_sequence = self.normalizer.normalize(current_sequence, instance_ids)
-                
+            if self.normalizer and self.normalizer.has_instance(instance_ids[0]):
+                current_sequence = self.normalizer.normalize(
+                    current_sequence, instance_ids
+                )
+
             model_input = (current_sequence, instance_features, current_time_features)
             output = self.forward(model_input)
-            
-            if self.normalizer:
+
+            if self.normalizer and self.normalizer.has_instance(instance_ids[0]):
                 output = self.normalizer.denormalize(output, instance_ids)
 
             steps_to_use = min(prediction_length, n_steps - steps_done)
-            
-            predictions[:, steps_done:steps_done + steps_to_use] = output[:, :steps_to_use]
+
+            predictions[:, steps_done : steps_done + steps_to_use] = output[
+                :, :steps_to_use
+            ]
             steps_done += steps_to_use
-            
+
             if steps_done >= n_steps:
                 break
 
-            current_sequence = torch.cat(
-                [
-                    current_sequence[:, steps_to_use:],  # Remove oldest steps
-                    output[:, :steps_to_use].unsqueeze(2),  # Add new predictions
-                ],
-                dim=1,
-            )[:, -seq_len:]  # Ensure sequence length remains constant
-            
             # Generate time features for the next prediction window
-            current_time_features = predict_future_time_features(
+            future_time_features = predict_future_time_features(
                 current_time_features,
                 self.time_features,
-                self.config["timestep_hours"],
-                prediction_length,
+                self.timestep_hours,
+                steps_to_use,
             )
+            # unsqueeze(2) adds dimension to output to match expected (batch_size, seq_len, 1)
+            current_sequence = torch.cat(
+                [
+                    current_sequence[:, steps_to_use:],
+                    output[:, :steps_to_use].unsqueeze(2),
+                ],
+                dim=1,
+            )[:, -seq_len:]
+
+            current_time_features = torch.cat(
+                [
+                    current_time_features[:, steps_to_use:],
+                    future_time_features,
+                ],
+                dim=1,
+            )[:, -seq_len:]
 
         return predictions
 
