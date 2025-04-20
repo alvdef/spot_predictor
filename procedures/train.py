@@ -58,6 +58,7 @@ class Training:
                 "training_hyperparams",
                 self.REQUIRED_CONFIG_FIELDS,
             )
+            self.logger.info("Using new configuration and model for training.")
 
         self._convert_numeric_params()
 
@@ -94,8 +95,14 @@ class Training:
             price_values = instance_data["sequences"].reshape(-1)
             normalizer.fit(instance_id, price_values)
 
+        # Compute global statistics for default normalization
+        normalizer.compute_global_stats()
+
         stats = normalizer.get_params_summary()
         self.logger.info(f"Normalizer prepared for {stats['count']} instances")
+        self.logger.info(
+            f"Global normalization mean: {normalizer.global_stats['mean']:.4f}, std: {normalizer.global_stats['std']:.4f}"
+        )
 
         self.model.attach_normalizer(normalizer)
 
@@ -168,9 +175,8 @@ class Training:
                     epoch_duration=epoch_duration,
                 )
 
-                # Only save model when it improves to avoid disk usage
                 if is_best:
-                    self._save_model(val_loss if val_loss is not None else train_loss)
+                    self.model.save()
 
                 self.metrics.print_epoch_stats()
 
@@ -273,16 +279,6 @@ class Training:
         )
 
         return avg_loss, avg_metrics
-
-    def _save_model(self, loss: float) -> None:
-        """Save model with its normalizer to preserve the complete forecasting pipeline."""
-        model_state = {
-            "model_state_dict": self.model.state_dict(),
-            "loss": loss,
-            "config": self.config,
-        }
-        self.checkpoints.save_if_best(model_state)
-        self.logger.info(f"Saved model checkpoint with loss: {loss:.6f}")
 
     def _convert_numeric_params(self):
         """

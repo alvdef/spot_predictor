@@ -17,6 +17,9 @@ class Normalizer:
         self.params: Dict[int, Dict[str, float]] = {}
         self.device = device
         self.logger = get_logger(__name__)
+        # Add global statistics for default normalization
+        self.global_stats: Dict[str, float] = {"mean": 0.0, "std": 1.0}
+        self.has_global_stats = False
 
     def fit(self, instance_id: int, values: torch.Tensor) -> "Normalizer":
         """
@@ -44,9 +47,33 @@ class Normalizer:
         self.params[instance_id] = {"mean": mean, "std": std}
         return self
 
+    def compute_global_stats(self) -> None:
+        """
+        Compute global normalization statistics based on all instance parameters.
+        These will be used as fallback for instances without specific parameters.
+        """
+        if not self.params:
+            self.logger.warning(
+                "No instance parameters available to compute global statistics"
+            )
+            return
+
+        means = [p["mean"] for p in self.params.values()]
+        stds = [p["std"] for p in self.params.values()]
+
+        self.global_stats["mean"] = sum(means) / len(means)
+        self.global_stats["std"] = sum(stds) / len(stds)
+        self.has_global_stats = True
+
+        self.logger.info(
+            f"Computed global normalization stats: mean={self.global_stats['mean']:.4f}, "
+            f"std={self.global_stats['std']:.4f} from {len(self.params)} instances"
+        )
+
     def normalize(self, values: torch.Tensor, instance_ids: List[int]) -> torch.Tensor:
         """
         Normalize tensor values for given instance IDs, normalizing only the price feature (index 0).
+        Uses global normalization for instances without specific parameters.
 
         Args:
             values: Tensor to normalize
@@ -64,12 +91,8 @@ class Normalizer:
         if len(values) != len(instance_ids):
             raise ValueError("Number of values must match number of instance IDs")
 
-        # Validate instance IDs
-        for id in instance_ids:
-            if id not in self.params:
-                raise ValueError(f"No parameters for instance {id}")
-
-        return self._apply_normalization(values, instance_ids, normalize=True)
+        use_global_stats = not all(instance_id in self.params for instance_id in instance_ids)
+        return self._apply_normalization(values, instance_ids, True, use_global_stats)
 
     def denormalize(
         self, values: torch.Tensor, instance_ids: List[int]
@@ -78,6 +101,7 @@ class Normalizer:
         Denormalize tensor values for given instance IDs.
         For 3D tensors, only denormalizes the price feature (index 0).
         For 1D/2D tensors, denormalizes all values (assumes they are prices).
+        Uses global normalization for instances without specific parameters.
 
         Args:
             values: Tensor to denormalize
@@ -95,17 +119,19 @@ class Normalizer:
         if len(values) != len(instance_ids):
             raise ValueError("Number of values must match number of instance IDs")
 
-        for id in instance_ids:
-            if id not in self.params:
-                raise ValueError(f"No parameters for instance {id}")
-
-        return self._apply_normalization(values, instance_ids, normalize=False)
+        use_global_stats = not all(instance_id in self.params for instance_id in instance_ids)
+        return self._apply_normalization(values, instance_ids, False, use_global_stats)
 
     def _apply_normalization(
-        self, values: torch.Tensor, instance_ids: List[int], normalize: bool
+        self,
+        values: torch.Tensor,
+        instance_ids: List[int],
+        normalize: bool,
+        use_global_stats: bool,
     ) -> torch.Tensor:
         """
         Apply normalization or denormalization to values.
+        Uses global statistics for instances without specific parameters.
 
         Args:
             values: Tensor to normalize/denormalize
@@ -115,13 +141,21 @@ class Normalizer:
         Returns:
             Processed tensor
         """
-        # Get normalization parameters for all instances in one go
-        means = torch.tensor(
-            [self.params[id]["mean"] for id in instance_ids], device=values.device
-        )
-        stds = torch.tensor(
-            [self.params[id]["std"] for id in instance_ids], device=values.device
-        )
+        if use_global_stats:
+            self.logger.warning("Using global stats for norm/denorm")
+            means = torch.tensor(
+                [self.global_stats["mean"]] * len(instance_ids), device=values.device
+            )
+            stds = torch.tensor(
+                [self.global_stats["std"]] * len(instance_ids), device=values.device
+            )
+        else:
+            means = torch.tensor(
+                [self.params[id]["mean"] for id in instance_ids], device=values.device
+            )
+            stds = torch.tensor(
+                [self.params[id]["std"] for id in instance_ids], device=values.device
+            )
 
         # Store original shape for reshaping later
         original_shape = values.shape
@@ -260,6 +294,18 @@ class Normalizer:
             Dictionary with all instance parameters
         """
         return {str(k): v for k, v in self.params.items()}
+
+    def has_instance(self, instance_id: int) -> bool:
+        """
+        Check if normalization parameters exist for a given instance ID.
+
+        Args:
+            instance_id: The instance ID to check
+
+        Returns:
+            True if parameters exist for this instance, False otherwise
+        """
+        return instance_id in self.params
 
     def set_params(self, params: Dict[str, Any]) -> None:
         """
