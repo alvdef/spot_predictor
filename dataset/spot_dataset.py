@@ -49,6 +49,7 @@ class SpotDataset(Dataset):
         df: pd.DataFrame,
         instance_features_df: pd.DataFrame,
         work_dir: str,
+        training: bool = False,
     ):
         """
         Initialize dataset with all data directly on GPU.
@@ -57,6 +58,7 @@ class SpotDataset(Dataset):
             df: DataFrame containing spot price data
             work_dir: Working directory containing config file
             instance_features_df: DataFrame containing instance features
+            mode: s
         """
         self.logger = get_logger(__name__)
         if df.empty:
@@ -76,6 +78,7 @@ class SpotDataset(Dataset):
             f"{work_dir}/config.yaml", "dataset_config", self.REQUIRED_FIELDS
         )
         self.device = get_device()
+        self.training = training
         self.instance_features_df = instance_features_df
 
         # Process instance features
@@ -165,7 +168,11 @@ class SpotDataset(Dataset):
                 - time_features: Tensor of time features
         """
         sequence_length = self.config["sequence_length"]
-        prediction_length = self.config["prediction_length"]
+        prediction_length = (
+            self.config["tr_prediction_length"]
+            if self.training
+            else self.config["prediction_length"]
+        )
         window_step = self.config["window_step"]
         required_length = sequence_length + prediction_length
 

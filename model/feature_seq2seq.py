@@ -12,7 +12,7 @@ class FeatureSeq2Seq(Model):
         "hidden_size",
         "input_size",
         "num_layers",
-        "prediction_length",
+        "tr_prediction_length",
         "teacher_forcing_ratio",
     ]
 
@@ -32,7 +32,7 @@ class FeatureSeq2Seq(Model):
         self.base_hidden_size = config["hidden_size"]
         self.input_size = config["input_size"]
         self.num_layers = config["num_layers"]
-        self.prediction_length = config["prediction_length"]
+        self.prediction_length = config["tr_prediction_length"]
         self.instance_feature_size = config["instance_feature_size"]
         self.time_feature_size = config["time_feature_size"]
 
@@ -219,8 +219,8 @@ class FeatureSeq2Seq(Model):
         """
         teacher_forcing_ratio = self.config["teacher_forcing_ratio"]
         sequence, instance_features, time_features = x
-        batch_size = sequence.size(0)
-        seq_len = sequence.size(1)
+
+        batch_size, seq_len, input_size = sequence.size()
 
         # Process instance features
         instance_embedding = self.instance_feature_net(instance_features)
@@ -233,7 +233,6 @@ class FeatureSeq2Seq(Model):
             self.num_layers, batch_size, self.rnn_hidden_size
         )  # Reshaped to match the GRU's expected dimensions
 
-        # Process time features and combine with input sequence
         reshaped_time_features = time_features.view(-1, self.time_feature_size)
         processed_time_features = self.time_feature_net(reshaped_time_features)
 
