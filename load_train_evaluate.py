@@ -82,8 +82,8 @@ logger.info(f"Train data: {train_start_date} to {train_end_date}, {train_days} d
 logger.info(f"Validation data: {val_start_date} to {val_end_date}, {val_days} days")
 logger.info(f"Test data: {test_start_date} to {test_end_date}, {test_days} days")
 
-train_dataset = SpotDataset(train_df, instance_info_df, DIR)
-val_dataset = SpotDataset(val_df, instance_info_df, DIR)
+train_dataset = SpotDataset(train_df, instance_info_df, DIR, training=True)
+val_dataset = SpotDataset(val_df, instance_info_df, DIR, training=True)
 
 # Pass train_dataset to get_model to automatically derive feature sizes
 model = get_model(DIR, train_dataset)
