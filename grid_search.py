@@ -12,12 +12,17 @@ import yaml
 import shutil
 import itertools
 import subprocess
-from pathlib import Path
 from datetime import datetime
 import time
 
 from utils import setup_logging, get_logger
-
+from utils.gpu.gpu_utils import (
+    check_gpu_availability,
+    setup_gpu_environment,
+    get_cuda_device,
+    log_gpu_info,
+    TORCH_AVAILABLE
+)
 
 # Initialize logging
 setup_logging(
@@ -95,12 +100,14 @@ def create_model_directory(model_name):
     return model_dir
 
 
-def start_training_job(model_name):
+def start_training_job(model_name, gpu_id=None):
     """
     Start a training job for the specified model configuration.
 
     Args:
         model_name (str): Name of the model to train
+        gpu_id (int, optional): Specific GPU ID to use for training. 
+                                If None, auto-select based on availability.
 
     Returns:
         subprocess.Popen: Process object for the running job
@@ -111,25 +118,59 @@ def start_training_job(model_name):
     # Open log file
     log_fd = open(log_file, "w")
 
+    # Set environment variables for GPU utilization
+    env = os.environ.copy()
+    
+    # Select GPU device based on availability
+    if TORCH_AVAILABLE:
+        gpu_info = check_gpu_availability()
+        
+        if gpu_info["gpu_available"]:
+            # If specific GPU requested and available, use it
+            if gpu_id is not None and gpu_id < gpu_info["device_count"]:
+                device_id = gpu_id
+            else:
+                # Auto-select based on least utilized GPU (simplified approach)
+                device_id = 0  # Default to first GPU
+            
+            # Set CUDA device ID for the process
+            env["CUDA_VISIBLE_DEVICES"] = str(device_id)
+            device = get_cuda_device(device_id)
+            logger.info(f"Training {model_name} using {device} (GPU {device_id})")
+        else:
+            # No GPU available - use CPU
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            logger.warning(f"Training {model_name} on CPU, no GPU available")
+    else:
+        # PyTorch not available - use CPU
+        env["CUDA_VISIBLE_DEVICES"] = ""
+        
     # Start the training process
     process = subprocess.Popen(
-        f"caffeinate python load_train_evaluate.py",
+        f"python load_train_evaluate.py",
         shell=True,
         stdout=log_fd,
         stderr=subprocess.STDOUT,
         start_new_session=True,  # Allow process to continue running after script ends
+        env=env,  # Pass GPU-enabled environment
     )
 
-    # Log start time
+    # Log start time and device info
     with open(f"{model_dir}/job_info.txt", "w") as f:
         f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Process ID: {process.pid}\n")
+        f.write(f"CUDA_VISIBLE_DEVICES: {env.get('CUDA_VISIBLE_DEVICES', 'Not set (CPU)')}\n")
+        if TORCH_AVAILABLE and gpu_info.get("gpu_available", False):
+            gpu_idx = int(env.get('CUDA_VISIBLE_DEVICES', '0'))
+            if gpu_idx < len(gpu_info["gpu_info"]):
+                gpu_data = gpu_info["gpu_info"][gpu_idx]
+                f.write(f"GPU: {gpu_data['name']} ({gpu_data['memory_total']:.2f} GB)\n")
 
     logger.info(f"Started training job for model {model_name} with PID {process.pid}")
     return process
 
 
-def run_grid_search(param_grid, max_concurrent=2, delay_seconds=10):
+def run_grid_search(param_grid, max_concurrent=4, delay_seconds=10):
     """
     Run a grid search with the specified parameter combinations.
 
@@ -160,6 +201,18 @@ def run_grid_search(param_grid, max_concurrent=2, delay_seconds=10):
 
     running_processes = []
     completed_models = []
+    gpu_assignments = {}  # Track which GPU is assigned to which process
+
+    # Check for GPU availability
+    gpu_info = check_gpu_availability()
+    num_gpus = gpu_info["device_count"] if gpu_info["gpu_available"] else 0
+    
+    if num_gpus > 0:
+        logger.info(f"Grid search will utilize {num_gpus} available GPU(s)")
+        # Configure GPU environment for optimal performance 
+        setup_gpu_environment()
+    else:
+        logger.info("Grid search will run on CPU only")
 
     # Create a backup of the original config.yaml
     shutil.copy2("config.yaml", "config.yaml.bak")
@@ -175,6 +228,10 @@ def run_grid_search(param_grid, max_concurrent=2, delay_seconds=10):
                     if proc.poll() is None:  # Process still running
                         still_running.append(proc)
                     else:
+                        # Free up the GPU if one was assigned
+                        if proc.pid in gpu_assignments:
+                            logger.info(f"Freeing GPU {gpu_assignments[proc.pid]}")
+                            del gpu_assignments[proc.pid]
                         logger.info(f"Process {proc.pid} has completed")
 
                 running_processes = still_running
@@ -200,11 +257,32 @@ def run_grid_search(param_grid, max_concurrent=2, delay_seconds=10):
 
             # Create model directory
             model_dir = create_model_directory(model_name)
+            
+            # Select GPU for this job if available
+            gpu_id = None
+            if num_gpus > 0:
+                # Simple round-robin GPU assignment
+                used_gpus = set(gpu_assignments.values())
+                for g in range(num_gpus):
+                    if g not in used_gpus:
+                        gpu_id = g
+                        break
+                # If all GPUs are in use, pick the one with the least assignments
+                if gpu_id is None:
+                    gpu_counts = {}
+                    for g in gpu_assignments.values():
+                        gpu_counts[g] = gpu_counts.get(g, 0) + 1
+                    gpu_id = min(gpu_counts, key=lambda x: gpu_counts[x])
 
-            # Start training job
-            process = start_training_job(model_name)
+            # Start training job with selected GPU
+            process = start_training_job(model_name, gpu_id)
             running_processes.append(process)
             completed_models.append(model_name)
+            
+            # Track GPU assignment
+            if gpu_id is not None:
+                gpu_assignments[process.pid] = gpu_id
+                logger.info(f"Assigned GPU {gpu_id} to process {process.pid}")
 
             # Delay before starting next job
             logger.info(f"Waiting {delay_seconds} seconds before starting next job...")
@@ -223,6 +301,14 @@ def run_grid_search(param_grid, max_concurrent=2, delay_seconds=10):
         for model in completed_models:
             logger.info(f"- Completed model: {model}")
 
+        # Generate completion summary
+        with open("grid_search_summary.txt", "w") as f:
+            f.write(f"Grid search completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total models trained: {len(completed_models)}\n\n")
+            f.write("Completed models:\n")
+            for model in completed_models:
+                f.write(f"- {model}\n")
+
 
 if __name__ == "__main__":
     # Define parameter grid
@@ -235,8 +321,37 @@ if __name__ == "__main__":
             "model_type": ["Seq2Seq", "LSTM"],
             # "hidden_size": [60, 120]
         },
+        "training_config": {
+            # "batch_size": [64, 128],  # Increased batch sizes for GPU
+            # "learning_rate": [1e-4, 5e-4],
+        },
     }
 
-    # Run grid search with max 2 concurrent jobs and 10 second delay between jobs
+    # Check for GPU availability using gpu_utils
+    gpu_info = check_gpu_availability()
+    if gpu_info["gpu_available"]:
+        # Configure GPU environment for optimal performance
+        setup_gpu_environment()
+        log_gpu_info()
+        
+        # Log GPU details
+        logger.info(f"GPU detected: {gpu_info['device_count']} device(s) available")
+        for gpu in gpu_info["gpu_info"]:
+            logger.info(f"Using GPU {gpu['index']}: {gpu['name']} ({gpu['memory_total']:.2f} GB)")
+            
+        # Set appropriate batch sizes based on GPU memory
+        if any(gpu["memory_total"] > 12 for gpu in gpu_info["gpu_info"]):
+            # For GPUs with >12GB memory, use larger batch sizes
+            param_grid["training_config"]["batch_size"] = [128, 256]
+        else:
+            # For GPUs with less memory, use moderate batch sizes
+            param_grid["training_config"]["batch_size"] = [64, 128]
+    else:
+        logger.warning(f"No GPU detected! Running on CPU only. Reason: {gpu_info['error']}")
+        # For CPU-only, use smaller batch sizes
+        param_grid["training_config"]["batch_size"] = [32, 64]
+
+    # Run grid search with appropriate concurrency based on hardware
     logger.info("Starting grid search process")
-    run_grid_search(param_grid, max_concurrent=2, delay_seconds=10)
+    max_concurrent = 4 if gpu_info["gpu_available"] else 2
+    run_grid_search(param_grid, max_concurrent=max_concurrent, delay_seconds=10)

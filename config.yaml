@@ -1,4 +1,4 @@
-model_name: eunorth-c-58-seq-4h-2d-TLoss
+model_name: s
 
 sequence_config:
   timestep_hours: 4
@@ -10,19 +10,19 @@ sequence_config:
 
 dataset_features:
   data_folder: data
-  start_date: 2024-04-01  # 2023-10-01
+  start_date: 2024-11-01  # 2023-10-01
   end_date: 2025-04-01    # 2024-12-30
-  regions: ['eu-north-1']
-  # regions: ['ap-northeast-1','ap-northeast-2','ap-northeast-3','ap-south-1', 'ap-southeast-1','ap-southeast-2','ca-central-1','eu-central-1','eu-north-1','eu-west-1','eu-west-2','eu-west-3','sa-east-1','us-east-1','us-east-2','us-west-1','us-west-2']
+  regions: [eu-north-1]
+  # regions: [ap-northeast-1,ap-northeast-2,ap-northeast-3,ap-south-1, ap-southeast-1,ap-southeast-2,ca-central-1,eu-central-1,eu-north-1,eu-west-1,eu-west-2,eu-west-3,sa-east-1,us-east-1,us-east-2,us-west-1,us-west-2]
   instance_filters:
     product_description: [Linux/UNIX]
-    # instance_type: ['c5.large']
-    generation: ['5', '6', '7', '8']
+    # instance_type: [c5.large]
+    generation: [5, 6, 7, 8]
     architectures: [x86_64]
     # av_zone: []
     instance_family: [c]
     metal: False
-    # size: ['nano', 'micro', 'small', 'medium', 'large', 'xlarge', '2xlarge']
+    # size: [nano, micro, small, medium, large, xlarge, 2xlarge]
   target_col: spot_price
   time_col: price_timestamp
 
@@ -32,7 +32,7 @@ dataset_config:             # sequence_length, window_step, prediction_length
   time_features: [dayofweek, dayofmonth]
 
 model_config:              # prediction_length
-  model_type: FeatureSeq2Seq
+  model_type: Seq2Seq
   input_size: 1           # Num of input features
   hidden_size: 64         # Num of hidden units in LSTM layers
   num_layers: 2           # Num of stacked LSTM layers
@@ -42,8 +42,8 @@ model_config:              # prediction_length
 
 loss_config:
   loss_type: TrendFocusLoss
-  mse_weight: 0.5         # Weight for MSE loss component
-  trend_weight: 0.5       # Weight for trend direction loss component
+  mse_weight: 1.0         # Weight for MSE loss component
+  trend_weight: 0.0       # Weight for trend direction loss component
   significant_threshold: 0.02  # Threshold for significant price movements (as fraction)
   smoothing_factor: 10.0  # Controls sharpness of approximations
 

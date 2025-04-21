@@ -5,7 +5,16 @@ import os
 from model import get_model
 from procedures import Training, Evaluate
 from dataset import SpotDataset, LoadSpotDataset
-from utils import get_name, ResultPlotter, setup_logging, get_logger
+from utils import (
+    get_name, 
+    ResultPlotter, 
+    setup_logging, 
+    get_logger,
+    # Import GPU utilities
+    check_gpu_availability,
+    setup_gpu_environment,
+    log_gpu_info
+)
 
 # Initialize logging system for the entire application
 setup_logging(
@@ -15,6 +24,18 @@ setup_logging(
 logger = get_logger(__name__)
 
 logger.info("Starting spot price prediction pipeline")
+
+# Setup GPU environment for G4DN instances
+gpu_info = check_gpu_availability()
+if gpu_info["gpu_available"]:
+    logger.info(f"GPU detected: {gpu_info['device_count']} available")
+    for gpu in gpu_info["gpu_info"]:
+        logger.info(f"Using GPU {gpu['index']}: {gpu['name']} ({gpu['memory_total']:.2f} GB)")
+    setup_gpu_environment()
+    log_gpu_info()
+else:
+    logger.warning(f"No GPU available: {gpu_info.get('error', 'Unknown reason')}")
+    logger.warning("Training will proceed on CPU, which will be significantly slower")
 
 DIR = get_name()
 os.makedirs(DIR + "/data", exist_ok=True)

@@ -12,6 +12,12 @@ from .features import (
     extract_time_features,
     predict_future_time_features,
 )
+from .gpu import (
+    check_gpu_availability,
+    setup_gpu_environment,
+    get_cuda_device,
+    log_gpu_info,
+)
 
 __all__ = [
     "get_device",
@@ -27,4 +33,8 @@ __all__ = [
     "MetricsTracker",
     "CheckpointTracker",
     "ResultPlotter",
+    "check_gpu_availability",
+    "setup_gpu_environment",
+    "get_cuda_device",
+    "log_gpu_info",
 ]

@@ -12,7 +12,7 @@ class Seq2Seq(Model):
         "hidden_size",
         "input_size",
         "num_layers",
-        "prediction_length",
+        "tr_prediction_length",
         "teacher_forcing_ratio",
     ]
 
@@ -27,15 +27,18 @@ class Seq2Seq(Model):
             config: Dictionary containing model configuration parameters.
         """
         # Extract configuration parameters
-        self.hidden_size = config["hidden_size"]
+        self.base_hidden_size = config["hidden_size"]
         self.input_size = config["input_size"]
         self.num_layers = config["num_layers"]
-        self.prediction_length = config["prediction_length"]
+        self.prediction_length = config["tr_prediction_length"]
+        
+        self.rnn_hidden_size = self.base_hidden_size
+        self.attention_hidden_size = self.base_hidden_size // 2
 
         # Define encoder (unidirectional for simplicity)
         self.encoder = nn.GRU(
             input_size=self.input_size,
-            hidden_size=self.hidden_size,
+            hidden_size=self.rnn_hidden_size,
             num_layers=self.num_layers,
             batch_first=True,
             bidirectional=False,  # Changed to unidirectional
@@ -43,24 +46,25 @@ class Seq2Seq(Model):
 
         # Attention mechanism for unidirectional encoder
         self.attention = nn.Linear(
-            self.hidden_size + self.hidden_size,  # Encoder output + decoder hidden
-            self.hidden_size,
+            self.rnn_hidden_size * 2,  # encoder, decoder
+            self.attention_hidden_size,
         )
+
         self.attention_combine = nn.Linear(
-            self.hidden_size + self.hidden_size,  # Context vector + decoder input
-            self.hidden_size,
+            self.rnn_hidden_size * 2,
+            self.rnn_hidden_size,
         )
 
         # Define decoder (unidirectional)
         self.decoder = nn.GRU(
-            input_size=self.hidden_size,  # Input size matches output of attention_combine
-            hidden_size=self.hidden_size,
+            input_size=self.rnn_hidden_size,
+            hidden_size=self.rnn_hidden_size,
             num_layers=self.num_layers,
             batch_first=False,
         )
 
         # Define output layers
-        self.fc_out = nn.Linear(self.hidden_size, 1)
+        self.fc_out = nn.Linear(self.rnn_hidden_size, 1)
 
         self._initialize_weights()
         self.to(self.device)
@@ -103,19 +107,9 @@ class Seq2Seq(Model):
         # Reshape the decoder hidden state correctly
         # Take just the first layer of the decoder hidden state, but keep all features
         decoder_hidden_for_attn = decoder_hidden[0:1]
-
-        # Repeat decoder hidden state for each input timestep (not doubling the sequence length)
-        decoder_hidden_expanded = decoder_hidden_for_attn.permute(1, 0, 2).repeat(
-            1, seq_len, 1
-        )
-
-        # Debug print for expanded hidden state
-        assert encoder_outputs.size(0) == decoder_hidden_expanded.size(
-            0
-        ), "Batch size mismatch"
-        assert encoder_outputs.size(1) == decoder_hidden_expanded.size(
-            1
-        ), "Sequence length mismatch"
+        
+        # Use expand instead of repeat for better memory efficiency
+        decoder_hidden_expanded = decoder_hidden_for_attn.permute(1, 0, 2).expand(-1, seq_len, -1)
 
         # Concatenate encoder outputs and decoder hidden state
         energy_input = torch.cat((encoder_outputs, decoder_hidden_expanded), dim=2)
@@ -157,12 +151,15 @@ class Seq2Seq(Model):
         decoder_hidden = encoder_hidden
 
         # Initialize decoder input
-        decoder_input = torch.zeros(1, batch_size, self.hidden_size, device=self.device)
+        decoder_input = torch.zeros(1, batch_size, self.rnn_hidden_size, device=self.device)
 
         # Store predictions
         predictions = torch.zeros(
             batch_size, self.prediction_length, device=self.device
         )
+        
+        # Pre-allocate tensor for teacher forcing to avoid repeated allocations
+        zero_input = torch.zeros(1, batch_size, self.rnn_hidden_size, device=self.device)
 
         # Decode sequence
         for t in range(self.prediction_length):
@@ -189,18 +186,17 @@ class Seq2Seq(Model):
             predictions[:, t] = output.squeeze(1)
 
             # Teacher forcing: decide whether to use real target or prediction
-            use_teacher_forcing = False
             if target is not None and t < self.prediction_length - 1:
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
-
-            if use_teacher_forcing and target is not None:
-                # Convert target value to appropriate decoder input format
-                next_input = target[:, t].unsqueeze(1).unsqueeze(0)
-                # Project to hidden size dimension
-                next_input = torch.zeros(
-                    1, batch_size, self.hidden_size, device=self.device
-                ).scatter_(2, next_input.long(), 1.0)
-                decoder_input = next_input
+                if use_teacher_forcing:
+                    # Convert target value to appropriate decoder input format
+                    next_input = target[:, t].unsqueeze(1).unsqueeze(0)
+                    # Use pre-allocated tensor and in-place operations for better efficiency
+                    zero_input.zero_()
+                    decoder_input = zero_input.scatter_(2, next_input.long(), 1.0)
+                else:
+                    # Use prediction as next input
+                    decoder_input = decoder_output
             else:
                 # Use prediction as next input
                 decoder_input = decoder_output

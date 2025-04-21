@@ -49,9 +49,9 @@ def extract_time_features(
             # Add to output columns
             feature_columns.append(cos_values)
             feature_columns.append(sin_values)
-
+            
     if not feature_columns:
-        raise ValueError(f"No valid time features found in {feature_names}")
+        return np.zeros((len(timestamps), 0), dtype=np.float32)
 
     return np.column_stack(feature_columns).astype(np.float32)
 

@@ -175,6 +175,7 @@ class SpotDataset(Dataset):
         )
         window_step = self.config["window_step"]
         required_length = sequence_length + prediction_length
+        self.logger.info(f"Required length for sequences {required_length}")
 
         # Use list comprehensions for better efficiency
         sequences = []
