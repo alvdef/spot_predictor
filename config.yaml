@@ -42,8 +42,7 @@ model_config:              # prediction_length
 
 loss_config:
   loss_type: TrendFocusLoss
-  mse_weight: 1.0         # Weight for MSE loss component
-  trend_weight: 0.0       # Weight for trend direction loss component
+  mse_weight: 1.0         # Weight for MSE loss component. trend_weight is 1-mse_weight
   significant_threshold: 0.02  # Threshold for significant price movements (as fraction)
   smoothing_factor: 10.0  # Controls sharpness of approximations
 

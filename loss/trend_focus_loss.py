@@ -14,7 +14,6 @@ from utils import (
 class TrendFocusLoss(LossFunction):
     REQUIRED_FIELDS = [
         "mse_weight",
-        "trend_weight",
         "significant_threshold",
         "smoothing_factor",
     ]
@@ -22,7 +21,7 @@ class TrendFocusLoss(LossFunction):
     def __init__(self, work_dir):
         super().__init__(work_dir)
         self.mse_weight = float(self.config["mse_weight"])
-        self.trend_weight = float(self.config["trend_weight"])
+        self.trend_weight = 1- self.mse_weight
         self.significant_threshold = float(self.config["significant_threshold"])
         self.smoothing_factor = float(self.config["smoothing_factor"])
         self.logger = get_logger(__name__)
