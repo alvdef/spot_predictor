@@ -7,8 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from loss import get_loss
-from utils import get_device, load_config, MetricsTracker
-from utils.logging_config import get_logger
+from utils import get_device, load_config, MetricsTracker, get_logger
 from dataset import SpotDataset, Normalizer
 from model import Model
 
@@ -44,20 +43,16 @@ class Training:
         self.instance_features_df = instance_features_df
 
         self.metrics = MetricsTracker(work_dir + "/training")
+        resumed_training = self.metrics.load()
+        if resumed_training:
+            self.logger.info("Resumed training. Loading model...")
+            self.model.load()
 
-        # Try to load previous checkpoint to continue training
-        prev_config, prev_best_loss = self.checkpoints.load(self.model)
-        if prev_config:
-            self.metrics.best_loss = prev_best_loss
-            self.config = prev_config
-            self.logger.info("Using previous configuration and model for training.")
-        else:
-            self.config = load_config(
-                f"{work_dir}/config.yaml",
-                "training_hyperparams",
-                self.REQUIRED_CONFIG_FIELDS,
-            )
-            self.logger.info("Using new configuration and model for training.")
+        self.config = load_config(
+            f"{work_dir}/config.yaml",
+            "training_hyperparams",
+            self.REQUIRED_CONFIG_FIELDS,
+        )
 
         self._convert_numeric_params()
 
@@ -66,13 +61,18 @@ class Training:
         # Initialize loss function with configurable weights
         self.criterion = get_loss(work_dir)
 
-        # AdamW optimizer tends to work better than Adam for time series models
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config["learning_rate"],
             weight_decay=self.config["weight_decay"],
             betas=(0.9, 0.999),  # Default betas work well for most time series tasks
         )
+        
+        if resumed_training and self.metrics._learning_rate > 0:
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = self.metrics._learning_rate
+            self.logger.info(f"Restored learning rate to {self.metrics._learning_rate:.6e}")
+
 
     def prepare_normalizer(self, dataset: SpotDataset) -> None:
         """
@@ -113,6 +113,9 @@ class Training:
         self, dataset: SpotDataset, val_dataset: Optional[SpotDataset] = None
     ):
         """Execute the training loop for the model."""
+        start_epoch = self.metrics._epoch
+        remaining_epochs = self.config["epochs"] - start_epoch
+
         self.logger.info("Training Configuration:")
         self.logger.info(f"- Model: {type(self.model).__name__}")
         self.logger.info(
@@ -124,7 +127,11 @@ class Training:
         self.logger.info(f"- Learning rate: {self.config['learning_rate']}")
         self.logger.info(f"- Max learning rate: {self.config['max_learning_rate']}")
         self.logger.info(f"- Weight decay: {self.config['weight_decay']}")
-        self.logger.info(f"- Epochs: {self.config['epochs']}")
+        if start_epoch > 0:
+            self.logger.info(f"- Starting from epoch: {start_epoch}")    
+            self.logger.info(f"- Epochs left: {remaining_epochs}")
+        else:
+            self.logger.info(f"- Epochs: {remaining_epochs}")
         self.logger.info(f"- Early stopping patience: {self.config['patience']}")
         self.logger.info(f"- Optimizer: {type(self.optimizer).__name__}")
         self.logger.info(f"- Loss function: {type(self.criterion).__name__}")
@@ -133,11 +140,9 @@ class Training:
         train_loader = dataset.get_data_loader(shuffle=True)
         val_loader = val_dataset.get_data_loader(shuffle=False) if val_dataset else None
 
-        # Create normalizer if needed - critical for consistent scaling across instances
         if self.model.normalizer is None:
             self.prepare_normalizer(dataset)
 
-        # Get metric names from the criterion for dynamic header display
         metric_names = self.criterion.get_metric_names()
         self.metrics.print_header(metrics_keys=metric_names)
 
@@ -146,7 +151,7 @@ class Training:
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.config["max_learning_rate"],
-            epochs=self.config["epochs"],
+            epochs=remaining_epochs,
             steps_per_epoch=steps_per_epoch,
             pct_start=self.config["pct_start"],  # Percent of training to increase LR
             div_factor=self.config["div_factor"],  # Initial LR division factor
@@ -186,21 +191,18 @@ class Training:
                     break
 
         except KeyboardInterrupt:
-            # Handle user interruption gracefully
             self.logger.warning("Training interrupted by user")
-            self.logger.info("Saving current model state...")
-
-            self.model.save()
-            self.metrics.save_to_files()
-
+        
         except Exception as e:
-            # Log any errors but still save metrics
             self.logger.error(f"Error during training: {str(e)}", exc_info=True)
-            self.metrics.save_to_files()
-            self.model.save()
             raise
+            
+        finally:
+            # Always save the current state regardless of how training ended
+            self.logger.info("Saving current model state and metrics...")
+            self.model.save()
+            self.metrics.save()
 
-        self.metrics.save_to_files()
 
     def _execute_training_phase(self, train_loader: DataLoader) -> Tuple[float, Dict]:
         self.model.train()

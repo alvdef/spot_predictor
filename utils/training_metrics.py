@@ -11,15 +11,12 @@ from .logging_config import get_logger
 @dataclass
 class TrainingHistory:
     """Stores training metrics history for visualization and analysis."""
-
-    # Basic metrics that are always tracked
     train_loss: List[float] = field(default_factory=list)
     val_loss: List[float] = field(default_factory=list)
     learning_rates: List[float] = field(default_factory=list)
     grad_norms: List[float] = field(default_factory=list)
     epoch_duration: List[float] = field(default_factory=list)
-
-    # Dynamic metrics storage
+    # Use defaultdict for convenient appending, even if key doesn't exist yet
     train_metrics: Dict[str, List[float]] = field(
         default_factory=lambda: defaultdict(list)
     )
@@ -31,8 +28,9 @@ class TrainingHistory:
 @dataclass
 class MetricsTracker:
     """
-    Tracks and manages training metrics, handles early stopping decisions,
-    and provides reporting functionality.
+    Tracks training metrics, manages early stopping, saves results, and handles checkpointing.
+
+    Combines robustness and detailed reporting with concise implementation where appropriate.
     """
 
     output_dir: str
@@ -41,10 +39,10 @@ class MetricsTracker:
     # Internal state
     _history: TrainingHistory = field(default_factory=TrainingHistory)
     _best_loss: float = float("inf")
-    _best_val_loss: float = float("inf")
+    _best_val_loss: float = float("inf") # Track best raw validation loss separately
     _epochs_no_improve: int = 0
 
-    # Current epoch state
+    # Current epoch state (updated at the end of each epoch)
     _epoch: int = 0
     _train_loss: float = float("inf")
     _val_loss: Optional[float] = None
@@ -53,29 +51,130 @@ class MetricsTracker:
     _learning_rate: float = 0.0
     _grad_norm: float = 0.0
     _epoch_duration: float = 0.0
+    _metrics_keys: Optional[List[str]] = None # Preserves desired header order for metrics
 
     def __post_init__(self):
-        # Create output directory to ensure files can be saved later
+        """Initializes logger, paths, and ensures output directory exists."""
         self.logger = get_logger(__name__)
         os.makedirs(self.output_dir, exist_ok=True)
         self.history_path = os.path.join(self.output_dir, "training_history.json")
         self.metrics_path = os.path.join(self.output_dir, "metrics.json")
 
+    def load(self) -> bool:
+        """
+        Loads previous training history and metrics from JSON files.
+        
+        Handles the first execution case (no files exist) gracefully.
+        
+        Returns:
+            bool: True if history was successfully loaded, False otherwise
+        """
+        # If history file doesn't exist, it's likely the first training run
+        if not os.path.exists(self.history_path):
+            self.logger.info(f"No previous training history found at {self.history_path}")
+            return False
+            
+        try:
+            self.logger.info(f"Loading previous training data from {self.history_path}")
+            with open(self.history_path, 'r') as f:
+                state_dict = json.load(f)
+                self.load_state_dict(state_dict)
+            self.logger.info(f"Successfully loaded training history from epoch {self._epoch}")
+            return True
+        except IOError as e:
+            self.logger.warning(f"Error reading training files: {e}")
+            return False
+        except json.JSONDecodeError as e:
+            self.logger.warning(f"Invalid JSON in training files: {e}")
+            return False
+        except Exception as e:
+            self.logger.warning(f"Unexpected error loading training data: {e}", exc_info=True)
+            return False
+
+    def save(self) -> bool:
+        """
+        Saves the complete training history and metrics summary to JSON files.
+        
+        This method should be called at the end of training or when interrupting 
+        training to ensure data is persisted.
+        
+        Returns:
+            bool: True if saving was successful, False if any errors occurred
+        """
+        success = True
+        
+        # Save complete history (useful for plotting/detailed analysis)
+        try:
+            with open(self.history_path, "w") as f:
+                # Use the history property which handles defaultdict conversion
+                json.dump(self.history, f, indent=4)
+            self.logger.info(f"Saved training history to {self.history_path}")
+        except Exception as e:
+            self.logger.error(f"Error saving training history: {e}", exc_info=True)
+            success = False
+
+        # Save summary metrics (useful for quick comparison/results tables)
+        try:
+            # Use history property to access potentially converted dicts
+            hist_dict = self.history
+            # Build summary dictionary with key training metrics
+            metrics_summary = {
+                "completed_epochs": self._epoch,
+                "best_eval_loss": self._best_loss,
+                "best_val_loss": self._best_val_loss if hist_dict["val_loss"] else None,
+                "final_train_loss": self._train_loss if hist_dict["train_loss"] else None,
+                "final_val_loss": self._val_loss, # Already None if validation wasn't run
+                "total_training_time_seconds": sum(hist_dict["epoch_duration"]),
+                "final_learning_rate": hist_dict["learning_rates"][-1] if hist_dict["learning_rates"] else None,
+                "final_grad_norm": hist_dict["grad_norms"][-1] if hist_dict["grad_norms"] else None,
+                **{f"final_train_{k}": v[-1] for k, v in hist_dict["train_metrics"].items() if v},
+                **{f"final_val_{k}": v[-1] for k, v in hist_dict["val_metrics"].items() if v}
+            }
+
+            with open(self.metrics_path, "w") as f:
+                json.dump(metrics_summary, f, indent=4)
+            self.logger.info(f"Saved metrics summary to {self.metrics_path}")
+        except Exception as e:
+            self.logger.error(f"Error saving metrics summary: {e}", exc_info=True)
+            success = False
+            
+        return success
+
+    # For backwards compatibility
+    def load_history(self) -> bool:
+        """
+        Legacy method for backwards compatibility.
+        Use load() instead.
+        """
+        return self.load()
+        
+    # For backwards compatibility
+    def save_to_files(self) -> None:
+        """
+        Legacy method for backwards compatibility. 
+        Use save() instead.
+        """
+        self.save()
+
     @property
     def history(self) -> Dict[str, Any]:
-        # Convert defaultdicts to regular dicts for serialization
+        """Provides a serializable dictionary representation of the training history."""
         history_dict = self._history.__dict__.copy()
+        # Ensure defaultdicts are converted to standard dicts for reliable JSON serialization
         history_dict["train_metrics"] = dict(self._history.train_metrics)
         history_dict["val_metrics"] = dict(self._history.val_metrics)
         return history_dict
 
     @property
     def best_loss(self) -> float:
+        """Returns the best evaluation loss observed so far (val_loss if available, else train_loss)."""
         return self._best_loss
 
     @best_loss.setter
     def best_loss(self, value: float) -> None:
-        # Allow setting best_loss externally for checkpoint resumption
+        """Allows setting best_loss externally (e.g., when resuming from checkpoint)."""
+        # Note: Resuming logic should typically restore the full state via load_state_dict
+        # which also handles _epochs_no_improve and other related fields.
         self._best_loss = value
 
     def update_epoch_state(
@@ -88,66 +187,70 @@ class MetricsTracker:
         epoch_duration: float = 0.0,
     ) -> Tuple[bool, bool]:
         """
-        Updates internal state with metrics from the current epoch and determines
-        if early stopping should be triggered.
+        Updates state with metrics from the completed epoch, checks for improvement
+        using strict inequality, and determines if early stopping should occur.
 
         Returns:
-            Tuple[bool, bool]: (is_best_model, should_stop_training)
+            Tuple[bool, bool]: (is_best_model, should_stop_training) based on evaluation loss.
         """
         self._epoch = epoch
         self._train_loss = train_loss
         self._val_loss = val_loss
         self._train_metrics = train_metrics.copy() if train_metrics else {}
         self._val_metrics = val_metrics.copy() if val_metrics else {}
-        self._learning_rate = train_metrics.get("learning_rate", 0.0)
-        self._grad_norm = train_metrics.get("grad_norm", 0.0)
         self._epoch_duration = epoch_duration
+        self._learning_rate = self._train_metrics.get("learning_rate", 0.0)
+        self._grad_norm = self._train_metrics.get("grad_norm", 0.0)
 
-        # Update history records
-        self._history.train_loss.append(train_loss)
-        self._history.learning_rates.append(self._learning_rate)
-        self._history.grad_norms.append(self._grad_norm)
-        self._history.epoch_duration.append(epoch_duration)
+        # Use local alias for history object for minor brevity
+        hist = self._history
+        hist.train_loss.append(self._train_loss)
+        hist.learning_rates.append(self._learning_rate)
+        hist.grad_norms.append(self._grad_norm)
+        hist.epoch_duration.append(self._epoch_duration)
 
-        # Record all training metrics dynamically
-        for key, value in train_metrics.items():
-            if (
-                key != "learning_rate" and key != "grad_norm"
-            ):  # Already tracked separately
-                self._history.train_metrics[key].append(value)
+        for key, value in self._train_metrics.items():
+            # Avoid duplicating metrics that have dedicated history lists
+            if key not in ("learning_rate", "grad_norm"):
+                hist.train_metrics[key].append(value)
 
-        # Record validation metrics if available
-        if val_loss is not None:
-            self._history.val_loss.append(val_loss)
-            self._best_val_loss = min(self._best_val_loss, val_loss)
+        if self._val_loss is not None:
+            hist.val_loss.append(self._val_loss)
+            self._best_val_loss = min(self._best_val_loss, self._val_loss) # Track best raw val loss
+            if self._val_metrics:
+                for key, value in self._val_metrics.items():
+                    hist.val_metrics[key].append(value)
 
-            if val_metrics:
-                for key, value in val_metrics.items():
-                    self._history.val_metrics[key].append(value)
+        # Determine improvement and early stopping based on evaluation loss
+        # Prioritize validation loss if available, otherwise use training loss
+        current_eval_loss = self._val_loss if self._val_loss is not None else self._train_loss
+        # Use strict inequality: loss must decrease to be considered an improvement
+        is_best = current_eval_loss < self._best_loss
 
-        # Use validation loss for early stopping if available, otherwise use training loss
-        current_eval_loss = val_loss if val_loss is not None else train_loss
-        is_best = False
-        if current_eval_loss <= self._best_loss:
+        if is_best:
+            self.logger.debug(
+                f"Epoch {epoch}: New best eval loss {current_eval_loss:.6f} (previously {self._best_loss:.6f})"
+            )
             self._best_loss = current_eval_loss
-            is_best = True
-            self._epochs_no_improve = 0  # Reset counter when we find a better model
+            self._epochs_no_improve = 0
         else:
-            self._epochs_no_improve += 1  # Increment counter when no improvement
+            self._epochs_no_improve += 1
+            self.logger.debug(
+                f"Epoch {epoch}: No improvement. Eval loss {current_eval_loss:.6f}, Best loss {self._best_loss:.6f}. Patience {self._epochs_no_improve}/{self.early_stopping_patience}."
+            )
 
-        # Signal early stopping if patience threshold is reached
         should_stop = self._epochs_no_improve >= self.early_stopping_patience
-
         return is_best, should_stop
 
     def compute_batch_average(
         self, total_loss: float, metrics: Dict[str, float], batch_count: int
     ) -> Tuple[float, Dict[str, float]]:
-        """Computes per-batch averages to normalize metrics at epoch end."""
-        avg_loss = total_loss / batch_count
-        avg_metrics = {k: v / batch_count for k, v in metrics.items()}
-
-        return avg_loss, avg_metrics
+        """Computes average loss and metrics over batches for epoch-level reporting."""
+        # Prevent division by zero if training loop somehow provides batch_count=0
+        if batch_count == 0:
+            return 0.0, {k: 0.0 for k in metrics}
+        # Concise calculation using dict comprehension
+        return total_loss / batch_count, {k: v / batch_count for k, v in metrics.items()}
 
     def track_batch_metrics(
         self,
@@ -155,183 +258,161 @@ class MetricsTracker:
         accumulated_metrics: Dict[str, float],
     ) -> None:
         """
-        Accumulates metrics from a batch into the provided dictionary.
-        Handles both tensor and scalar values for flexibility.
+        Accumulates metrics from a single batch into the provided dictionary.
+        Handles both tensor and scalar values, ensuring float accumulation.
         """
         for key, value in metrics.items():
-            if key not in accumulated_metrics:
-                accumulated_metrics[key] = 0.0
-            # Extract item from tensor if needed
-            accumulated_metrics[key] += (
-                value.item() if isinstance(value, torch.Tensor) else value
-            )
+            # Use .item() to extract scalar from tensor, avoiding potential device issues/memory leaks
+            current_value = value.item() if isinstance(value, torch.Tensor) else float(value)
+            # Use .get() for safe accumulation, initializing to 0.0 if key is new
+            accumulated_metrics[key] = accumulated_metrics.get(key, 0.0) + current_value
 
     def update_progress_bar(
         self, pbar: Any, loss: torch.Tensor, metrics: Dict[str, Any]
     ) -> None:
         """
-        Updates progress bar with current batch metrics for real-time feedback during training.
-        Extracts scalar values from tensors to avoid CUDA synchronization issues.
+        Updates a progress bar (e.g., tqdm) with current batch loss and metrics.
+        Uses concise dictionary unpacking for construction.
         """
-        # Create an ordered dictionary with loss first, then other metrics
-        display_metrics = {}
+        # Use dict unpacking for concise creation of the postfix dictionary
+        display_metrics = {
+            "loss": f"{loss.item():.6f}",
+            # Format other metrics, extracting scalar value if it's a tensor
+            **{
+                k: f"{v.item() if isinstance(v, torch.Tensor) else v:.6f}"
+                for k, v in metrics.items()
+            }
+        }
+        # Avoid unnecessary frequent refreshes which can slow down training
+        pbar.set_postfix(display_metrics, refresh=False)
 
-        # Add loss first so it appears at the beginning
-        display_metrics["loss"] = f"{loss.item():.6f}"
-
-        # Then add remaining metrics
-        for key, value in metrics.items():
-            display_metrics[key] = (
-                f"{value.item() if isinstance(value, torch.Tensor) else value:.6f}"
-            )
-
-        pbar.set_postfix(display_metrics, refresh=False)  # Avoid unnecessary refreshes
-
-    def print_header(self, metrics_keys=None) -> None:
+    def print_header(self, metrics_keys: Optional[List[str]] = None) -> None:
         """
-        Prints the header row for training progress display with dynamic metric names.
-
-        Args:
-            metrics_keys: Optional list of metric names to display in header
+        Prints the header row for training progress table display.
+        Uses provided metric keys for consistent column order.
         """
-        # Store keys for later use in print_epoch_stats
-        if metrics_keys:
-            self._store_metric_keys(metrics_keys)
+        self._store_metric_keys(metrics_keys)
 
-        # Create columns for basic metrics
-        header = [f"{'Epoch':^8}", f"{'Train Loss':^14}", f"{'Val Loss':^14}"]
+        header_parts = [f"{'Epoch':^8}", f"{'Train Loss':^14}", f"{'Val Loss':^14}"]
 
-        # Add dynamic metric columns
-        if metrics_keys:
-            for metric in metrics_keys:
-                header.append(f"{metric:^12}")
-        else:
-            header.append(f"{'Metrics':^30}")
+        if self._metrics_keys:
+            header_parts.extend([f"{metric:^12}" for metric in self._metrics_keys])
+        # Only add generic 'Other Metrics' if keys weren't specified AND dynamic metrics actually exist
+        elif self._history.train_metrics or self._history.val_metrics:
+             header_parts.append(f"{'Other Metrics':^30}")
 
-        # Add remaining columns
-        header.extend([f"{'LR':^10}", f"{'Duration':^8}"])
+        header_parts.extend([f"{'LR':^10}", f"{'Duration':^8}"])
 
-        # Print the header row
-        header_str = " | ".join(header)
-        print(header_str)
-        self.logger.info(f"Training progress tracking started:\n{header_str}")
-
-        # Calculate total width and print the separator line
-        total_width = (
-            sum(len(col) for col in header) + (len(header) - 1) * 3
-        )  # 3 spaces for " | "
-        separator = "-" * total_width
-        print(separator)
+        header_str = " | ".join(header_parts)
+        self.logger.info(f"{header_str}")
+        self.logger.info("-" * len(header_str))
 
     def print_epoch_stats(self) -> None:
         """
-        Prints statistics for the current epoch using stored state.
-        Uses 'N/A' for missing metrics to maintain consistent output formatting.
+        Prints the statistics row for the most recently completed epoch.
+        Uses stored metric keys for column ordering if available. Logs detailed info.
         """
-        # Format base values
         epoch_str = f"{self._epoch:^8d}"
         train_loss_str = f"{self._train_loss:^14.6f}"
         val_loss_str = (
             f"{self._val_loss:^14.6f}" if self._val_loss is not None else f"{'N/A':^14}"
         )
 
-        # Format metrics
+        # Prepare dynamic metrics for display, excluding those with dedicated columns
+        displayable_metrics = self._val_metrics.copy() if self._val_metrics else {}
+        for k, v in self._train_metrics.items():
+             if k not in displayable_metrics and k not in ("learning_rate", "grad_norm"):
+                  displayable_metrics[k] = v
+
         metric_parts = []
-        relevant_metrics = {
-            k: v
-            for k, v in self._train_metrics.items()
-            if k not in ("learning_rate", "grad_norm")
-        }
-
-        # Get ordered metric values that match the header
-        if hasattr(self, "_metrics_keys") and self._metrics_keys:
+        if self._metrics_keys:
+            # Use stored keys for order, safely handling missing metrics with .get
             for key in self._metrics_keys:
-                if key in relevant_metrics:
-                    metric_parts.append(f"{relevant_metrics[key]:^12.4f}")
-                else:
-                    metric_parts.append(f"{'N/A':^12}")
-        # Fall back to alphabetical display if no keys defined
-        elif relevant_metrics:
-            for key, value in sorted(relevant_metrics.items()):
-                metric_parts.append(f"{value:^12.4f}")
-        else:
-            metric_parts.append(f"{'N/A':^30}")
+                value = displayable_metrics.get(key)
+                # Format correctly whether value exists or not
+                metric_parts.append(f"{value:^12.4f}" if value is not None else f"{'N/A':^12}")
+        elif displayable_metrics:
+             # Group metrics for the generic column if no keys specified
+            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in sorted(displayable_metrics.items()))
+            metric_parts.append(f"{metrics_str:^30}") # Fit into the generic column
 
-        # Format learning rate and duration
         lr_str = f"{self._learning_rate:^10.1e}"
-        duration_str = f"{self._epoch_duration:^8.1f}"
+        duration_str = f"{self._epoch_duration:^8.1f}s" # Add 's' unit for clarity
 
-        # Combine all parts and print
-        row_parts = (
-            [epoch_str, train_loss_str, val_loss_str]
-            + metric_parts
-            + [lr_str, duration_str]
-        )
-        row_str = " | ".join(row_parts)
-        print(row_str)
+        row_parts = [epoch_str, train_loss_str, val_loss_str] + metric_parts + [lr_str, duration_str]
+        self.logger.info(" | ".join(row_parts))
 
-        # Also log to file with more concise format for log readability
-        log_message = f"Epoch {self._epoch}: train={self._train_loss:.6f}"
+        # --- Detailed Logging ---
+        log_items = [f"Epoch {self._epoch}: TrainLoss={self._train_loss:.6f}"]
         if self._val_loss is not None:
-            log_message += f", val={self._val_loss:.6f}"
-        if relevant_metrics:
-            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in relevant_metrics.items())
-            log_message += f", {metrics_str}"
-        log_message += (
-            f", lr={self._learning_rate:.1e}, time={self._epoch_duration:.1f}s"
-        )
-        self.logger.info(log_message)
+            log_items.append(f"ValLoss={self._val_loss:.6f}")
+        if displayable_metrics:
+            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in sorted(displayable_metrics.items()))
+            if metrics_str: log_items.append(f"Metrics=({metrics_str})")
+        log_items.append(f"LR={self._learning_rate:.1e}")
+        log_items.append(f"Time={self._epoch_duration:.1f}s")
 
-    # Store metric keys for consistent display order
-    def _store_metric_keys(self, metrics_keys):
-        """Store metric keys to ensure consistent order in header and stats output."""
-        self._metrics_keys = metrics_keys
+        # Add improvement status to log for clarity
+        if self._epochs_no_improve == 0 and self._epoch > 0:
+            log_items.append("(*Best*)")
+        elif self._epochs_no_improve > 0:
+             log_items.append(f"(Patience {self._epochs_no_improve}/{self.early_stopping_patience})")
+
+        self.logger.info(", ".join(log_items))
+
+    def _store_metric_keys(self, metrics_keys: Optional[List[str]]):
+        """Stores the desired order of metric keys for consistent display."""
+        # Ensure it's stored as a list or None
+        self._metrics_keys = list(metrics_keys) if metrics_keys is not None else None
 
     def print_early_stopping(self) -> None:
-        """Prints early stopping notification."""
-        separator = "-" * 100
-        message = f"Early stopping triggered after {self.early_stopping_patience} epochs without improvement."
-        print(separator)
-        print(message)
+        """Prints and logs a detailed notification when early stopping is triggered."""
+        message = (
+            f"EARLY STOPPING: Patience of {self.early_stopping_patience} epochs "
+            f"without improvement reached at epoch {self._epoch}."
+            f" Best eval loss was {self._best_loss:.6f}."
+        )
         self.logger.warning(message)
 
-    def save_to_files(self) -> None:
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """
-        Saves training history and final metrics to JSON files.
-        Uses try-except to ensure training isn't interrupted if file saving fails.
+        Restores the tracker's state from a checkpoint dictionary.
+        Uses .get() for robustness against missing keys in older state dicts.
+        Correctly restores defaultdict behavior for dynamic metrics history.
         """
-        try:
-            # Save complete training history for detailed analysis
-            with open(self.history_path, "w") as f:
-                json.dump(self.history, f)
+        history_state = state_dict.get("history", {})
 
-            # Save summary metrics for quick reference and model comparison
-            metrics = {
-                "best_loss": self._best_loss,
-                "final_train_loss": self._train_loss,
-                "final_val_loss": self._val_loss,
-                "training_time": sum(self._history.epoch_duration),
-                "completed_epochs": len(self._history.train_loss),
-            }
+        # Restore TrainingHistory, ensuring dynamic metrics are defaultdicts
+        self._history = TrainingHistory(
+            train_loss=history_state.get("train_loss", []),
+            val_loss=history_state.get("val_loss", []),
+            learning_rates=history_state.get("learning_rates", []),
+            grad_norms=history_state.get("grad_norms", []),
+            epoch_duration=history_state.get("epoch_duration", []),
+            # Crucially, restore as defaultdict to maintain behavior
+            train_metrics=defaultdict(list, history_state.get("train_metrics", {})),
+            val_metrics=defaultdict(list, history_state.get("val_metrics", {})),
+        )
 
-            # Include final performance metrics dynamically
-            for key, values in self._history.train_metrics.items():
-                if values:
-                    metrics[f"final_{key}"] = values[-1]
+        # Restore internal state counters/values using .get with appropriate defaults
+        self._best_loss = state_dict.get("best_loss", float("inf"))
+        self._best_val_loss = state_dict.get("best_val_loss", float("inf"))
+        self._epochs_no_improve = state_dict.get("epochs_no_improve", 0)
 
-            for key, values in self._history.val_metrics.items():
-                if values:
-                    metrics[f"final_val_{key}"] = values[-1]
+        # Restore last epoch's state (less critical if resuming *before* an epoch)
+        self._epoch = state_dict.get("epoch", 0)
+        self._train_loss = state_dict.get("train_loss", float("inf"))
+        self._val_loss = state_dict.get("val_loss", None)
+        self._train_metrics = state_dict.get("train_metrics", {})
+        self._val_metrics = state_dict.get("val_metrics", {})
+        self._learning_rate = state_dict.get("learning_rate", 0.0)
+        self._grad_norm = state_dict.get("grad_norm", 0.0)
+        self._epoch_duration = state_dict.get("epoch_duration", 0.0)
 
-            with open(self.metrics_path, "w") as f:
-                json.dump(metrics, f)
+        # Restore metric keys order using .get for safety
+        self._metrics_keys = state_dict.get("metrics_keys", None)
 
-            self.logger.info(
-                f"Saved metrics to {self.metrics_path} and training history to {self.history_path}"
-            )
-
-        except Exception as e:
-            # Log the error but don't crash the program
-            error_message = f"Error saving metrics data: {str(e)}"
-            print(error_message)
-            self.logger.error(error_message, exc_info=True)
+        self.logger.info(
+            f"Restored metrics tracker state from epoch {self._epoch}. "
+            f"Best loss: {self._best_loss:.6f}, Patience: {self._epochs_no_improve}"
+        )
