@@ -1,4 +1,4 @@
-from .torch import get_device, CheckpointTracker
+from .torch import get_device
 from .config import load_config, get_name
 from .training_metrics import MetricsTracker
 from .plotter import ResultPlotter
@@ -31,7 +31,6 @@ __all__ = [
     "calculate_spot_price_savings",
     "predict_future_time_features",
     "MetricsTracker",
-    "CheckpointTracker",
     "ResultPlotter",
     "check_gpu_availability",
     "setup_gpu_environment",

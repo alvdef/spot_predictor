@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from loss import get_loss
-from utils import get_device, load_config, MetricsTracker, CheckpointTracker
+from utils import get_device, load_config, MetricsTracker
 from utils.logging_config import get_logger
 from dataset import SpotDataset, Normalizer
 from model import Model
@@ -44,7 +44,6 @@ class Training:
         self.instance_features_df = instance_features_df
 
         self.metrics = MetricsTracker(work_dir + "/training")
-        self.checkpoints = CheckpointTracker(work_dir + "/training")
 
         # Try to load previous checkpoint to continue training
         prev_config, prev_best_loss = self.checkpoints.load(self.model)
