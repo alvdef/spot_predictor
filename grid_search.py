@@ -3,8 +3,12 @@
 Grid search automation script for spot_predictor models.
 
 This script performs a grid search by training multiple models with different 
-configurations. It automatically updates the config.yaml file, creates the 
-necessary model directories, and launches training jobs in parallel.
+configurations passed via JSON string in command line. It automatically updates 
+the config.yaml file, creates the necessary model directories, and launches 
+training jobs in parallel.
+
+python grid_search.py --param-grid '{"model_config": {"model_type": ["FeatureSeq2Seq"], "hidden_size": [64, 128]}}' --max-concurrent 3 --delay 5
+
 """
 
 import os
@@ -12,6 +16,8 @@ import yaml
 import shutil
 import itertools
 import subprocess
+import argparse
+import json
 from datetime import datetime
 import time
 
@@ -25,12 +31,11 @@ from utils.gpu.gpu_utils import (
 )
 
 # Initialize logging
-setup_logging(
-    log_level="INFO",
-    log_file="logs/grid_search.log",
-)
+setup_logging()
 logger = get_logger(__name__)
 
+# Default concurrent jobs limit
+DEFAULT_MAX_CONCURRENT = 2
 
 def update_config_file(params):
     """
@@ -54,26 +59,16 @@ def update_config_file(params):
         for key, value in values.items():
             config[section][key] = value
 
-    # Generate a descriptive model name based on key parameters
-    model_name = f"{'-'.join(config['dataset_features']['regions'])}"
-
-    if (
-        "instance_filters" in config["dataset_features"]
-        and "instance_family" in config["dataset_features"]["instance_filters"]
-    ):
-        model_name += (
-            f"-{config['dataset_features']['instance_filters']['instance_family']}"
-        )
-
-    if "generation" in config["dataset_features"]["instance_filters"]:
-        gen_str = "".join(config["dataset_features"]["instance_filters"]["generation"])
-        model_name += f"-{gen_str}"
-
+    reg_str = f"{'-'.join(config['dataset_features']['regions'])}"
+    fam_str = "".join(map(str, config['dataset_features']['instance_filters']['instance_family']))
+    gen_str = "".join(map(str, config["dataset_features"]["instance_filters"]["generation"]))
+    model_type = config["model_config"]["model_type"].lower()
     timestep = config["sequence_config"]["timestep_hours"]
     pred_days = config["sequence_config"]["model_pred_days"]
-    model_type = config["model_config"]["model_type"].lower()
+    mse_weight = config["loss_config"]["mse_weight"]
+    hidden_size = config["model_config"]["hidden_size"]
 
-    model_name += f"-{model_type}-{timestep}h-{pred_days}d"
+    model_name = f"{reg_str}-{fam_str}-{gen_str}-{model_type}-{timestep}h-{pred_days}d-{mse_weight}wt-{hidden_size}hd"
 
     # Update the model name in the config
     config["model_name"] = model_name
@@ -170,7 +165,7 @@ def start_training_job(model_name, gpu_id=None):
     return process
 
 
-def run_grid_search(param_grid, max_concurrent=4, delay_seconds=10):
+def run_grid_search(param_grid, max_concurrent=DEFAULT_MAX_CONCURRENT, delay_seconds=10):
     """
     Run a grid search with the specified parameter combinations.
 
@@ -310,48 +305,57 @@ def run_grid_search(param_grid, max_concurrent=4, delay_seconds=10):
                 f.write(f"- {model}\n")
 
 
-if __name__ == "__main__":
-    # Define parameter grid
-    param_grid = {
-        "sequence_config": {
-            "timestep_hours": [1, 3, 4, 6, 8, 12],
-            # "model_pred_days": [1, 2, 5]
-        },
-        "model_config": {
-            "model_type": ["Seq2Seq", "LSTM"],
-            # "hidden_size": [60, 120]
-        },
-        "training_config": {
-            # "batch_size": [64, 128],  # Increased batch sizes for GPU
-            # "learning_rate": [1e-4, 5e-4],
-        },
-    }
+def parse_arguments():
+    """
+    Parse command line arguments for grid search configuration.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments
+    """
+    parser = argparse.ArgumentParser(description="Grid search for spot price prediction models")
+    
+    # Opciones generales
+    parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT,
+                        help=f"Maximum number of concurrent jobs (default: {DEFAULT_MAX_CONCURRENT})")
+    parser.add_argument("--delay", type=int, default=10,
+                        help="Delay in seconds between launching jobs (default: 10)")
+    
+    # JSON con configuración de parámetros
+    parser.add_argument("--param-grid", type=str, required=True,
+                       help="JSON string with parameter grid configuration")
+    
+    return parser.parse_args()
 
-    # Check for GPU availability using gpu_utils
-    gpu_info = check_gpu_availability()
-    if gpu_info["gpu_available"]:
-        # Configure GPU environment for optimal performance
-        setup_gpu_environment()
-        log_gpu_info()
+
+def get_param_grid_from_args(args):
+    """
+    Get parameter grid configuration from JSON string.
+    
+    Args:
+        args (argparse.Namespace): Parsed command line arguments
         
-        # Log GPU details
-        logger.info(f"GPU detected: {gpu_info['device_count']} device(s) available")
-        for gpu in gpu_info["gpu_info"]:
-            logger.info(f"Using GPU {gpu['index']}: {gpu['name']} ({gpu['memory_total']:.2f} GB)")
-            
-        # Set appropriate batch sizes based on GPU memory
-        if any(gpu["memory_total"] > 12 for gpu in gpu_info["gpu_info"]):
-            # For GPUs with >12GB memory, use larger batch sizes
-            param_grid["training_config"]["batch_size"] = [128, 256]
-        else:
-            # For GPUs with less memory, use moderate batch sizes
-            param_grid["training_config"]["batch_size"] = [64, 128]
-    else:
-        logger.warning(f"No GPU detected! Running on CPU only. Reason: {gpu_info['error']}")
-        # For CPU-only, use smaller batch sizes
-        param_grid["training_config"]["batch_size"] = [32, 64]
+    Returns:
+        dict: Parameter grid configuration
+    """
+    try:
+        return json.loads(args.param_grid)
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in --param-grid")
+        raise
 
-    # Run grid search with appropriate concurrency based on hardware
+
+if __name__ == "__main__":
+    args = parse_arguments()
+    param_grid = get_param_grid_from_args(args)
+    
+    setup_gpu_environment()
+    log_gpu_info()
+    
+    logger.info(f"Running grid search with configuration:")
+    for section, params in param_grid.items():
+        logger.info(f"  {section}:")
+        for key, values in params.items():
+            logger.info(f"    {key}: {values}")
+    
     logger.info("Starting grid search process")
-    max_concurrent = 4 if gpu_info["gpu_available"] else 2
-    run_grid_search(param_grid, max_concurrent=max_concurrent, delay_seconds=10)
+    run_grid_search(param_grid, max_concurrent=args.max_concurrent, delay_seconds=args.delay)

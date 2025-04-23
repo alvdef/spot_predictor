@@ -10,8 +10,8 @@ sequence_config:
 
 dataset_features:
   data_folder: data
-  start_date: 2024-11-01  # 2023-10-01
-  end_date: 2025-04-01    # 2024-12-30
+  start_date: 2024-01-01  # 2023-10-01
+  end_date: 2025-04-21    # 2024-12-30
   regions: [eu-north-1]
   # regions: [ap-northeast-1,ap-northeast-2,ap-northeast-3,ap-south-1, ap-southeast-1,ap-southeast-2,ca-central-1,eu-central-1,eu-north-1,eu-west-1,eu-west-2,eu-west-3,sa-east-1,us-east-1,us-east-2,us-west-1,us-west-2]
   instance_filters:
@@ -27,13 +27,12 @@ dataset_features:
   time_col: price_timestamp
 
 dataset_config:             # sequence_length, window_step, prediction_length
-  batch_size: 64           # Num of samples per batch
+  batch_size: 128           # Num of samples per batch
   instance_features: [generation, modifiers, size]
   time_features: [dayofweek, dayofmonth]
 
 model_config:              # prediction_length
   model_type: Seq2Seq
-  input_size: 1           # Num of input features
   hidden_size: 64         # Num of hidden units in LSTM layers
   num_layers: 2           # Num of stacked LSTM layers
   output_scale: 1.0       # Scaling factor for model outputs to handle price ranges
@@ -47,11 +46,11 @@ loss_config:
   smoothing_factor: 10.0  # Controls sharpness of approximations
 
 training_hyperparams:
-  epochs: 40              # Num of training epochs
+  epochs: 20              # Num of training epochs
   learning_rate: 1e-4     # Initial learning rate for optimizer
   max_learning_rate: 2e-6 # Maximum learning rate for scheduler
   weight_decay: 5e-5      # L2 regularization factor
-  patience: 10
+  patience: 5
   pct_start: 0.2
   div_factor: 10
 

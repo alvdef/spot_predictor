@@ -10,7 +10,6 @@ from .base import Model
 class Seq2Seq(Model):
     REQUIRED_FIELDS = [
         "hidden_size",
-        "input_size",
         "num_layers",
         "tr_prediction_length",
         "teacher_forcing_ratio",
@@ -28,7 +27,6 @@ class Seq2Seq(Model):
         """
         # Extract configuration parameters
         self.base_hidden_size = config["hidden_size"]
-        self.input_size = config["input_size"]
         self.num_layers = config["num_layers"]
         self.prediction_length = config["tr_prediction_length"]
         
@@ -37,7 +35,7 @@ class Seq2Seq(Model):
 
         # Define encoder (unidirectional for simplicity)
         self.encoder = nn.GRU(
-            input_size=self.input_size,
+            input_size=1,
             hidden_size=self.rnn_hidden_size,
             num_layers=self.num_layers,
             batch_first=True,

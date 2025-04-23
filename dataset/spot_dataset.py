@@ -37,6 +37,7 @@ class SpotDataset(Dataset):
     REQUIRED_FIELDS = [
         "sequence_length",
         "prediction_length",
+        "tr_prediction_length",
         "window_step",
         "batch_size",
         "instance_features",
@@ -95,7 +96,6 @@ class SpotDataset(Dataset):
         self.logger.info(f"Input shape: {self.X.shape}, Target shape: {self.y.shape}")
         self.logger.info(f"Instance feature shape: {self.features_tensor.shape}")
         self.logger.info(f"Time feature shape: {self.time_features.shape}")
-        self.logger.info(f"Timestamps stored for debugging and visualization")
 
     def _process_instance_features(self) -> Tuple[torch.Tensor, Dict[int, int]]:
         """
@@ -314,6 +314,7 @@ class SpotDataset(Dataset):
             batch_size=self.config["batch_size"],
             shuffle=shuffle,
             pin_memory=True,
+            num_workers=2 if self.device.type is not 'mps' else 0
         )
 
     def __len__(self) -> int:

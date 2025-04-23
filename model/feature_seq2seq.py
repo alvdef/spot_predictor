@@ -10,7 +10,6 @@ from .base import Model
 class FeatureSeq2Seq(Model):
     REQUIRED_FIELDS = [
         "hidden_size",
-        "input_size",
         "num_layers",
         "tr_prediction_length",
         "teacher_forcing_ratio",
@@ -30,7 +29,6 @@ class FeatureSeq2Seq(Model):
         """
         # Base configuration parameters
         self.base_hidden_size = config["hidden_size"]
-        self.input_size = config["input_size"]
         self.num_layers = config["num_layers"]
         self.prediction_length = config["tr_prediction_length"]
         self.instance_feature_size = config["instance_feature_size"]
@@ -65,7 +63,7 @@ class FeatureSeq2Seq(Model):
 
         # Define encoder
         self.encoder = nn.GRU(
-            input_size=self.input_size + self.time_embedding_size,
+            input_size=1 + self.time_embedding_size,
             hidden_size=self.rnn_hidden_size,
             num_layers=self.num_layers,
             batch_first=True,
@@ -108,11 +106,6 @@ class FeatureSeq2Seq(Model):
 
         # Output layer
         self.fc_out = nn.Linear(self.rnn_hidden_size, 1)
-
-        # Gate mechanism
-        self.feature_gate = nn.Sequential(
-            nn.Linear(self.rnn_hidden_size * 2, self.rnn_hidden_size), nn.Sigmoid()
-        )
 
         self._initialize_weights()
         self.to(self.device)
@@ -249,12 +242,11 @@ class FeatureSeq2Seq(Model):
         # For unidirectional GRU, use the encoder hidden state for the decoder
         decoder_hidden = encoder_hidden
 
-        # Initialize decoder input
-        decoder_input = torch.zeros(
-            1, batch_size, self.rnn_hidden_size, device=self.device
-        )
+        # Initialize decoder input - Start with a zero vector representing the previous step's output value projection
+        # Shape (batch_size, 1) -> projected to (batch_size, rnn_hidden_size) -> unsqueezed to (1, batch_size, rnn_hidden_size)
+        # We start with a scalar 0 projected.
+        decoder_input = self.decoder_input_proj(torch.zeros(batch_size, 1, device=self.device)).unsqueeze(0)
 
-        # Store predictions
         predictions = torch.zeros(
             batch_size, self.prediction_length, device=self.device
         )
@@ -266,50 +258,39 @@ class FeatureSeq2Seq(Model):
                 decoder_hidden, encoder_outputs, instance_embedding
             )
 
-            # Compute gate values to control feature influence
-            gate_input = torch.cat(
-                [decoder_input.squeeze(0), instance_embedding_2d], dim=1
-            )
-            gate = self.feature_gate(gate_input)
-
-            # Apply gate to control feature influence
-            gated_context = context_vector * gate + context_vector * (1 - gate)
-
-            # Combine gated context with decoder input
+            # Combine the projected previous output/target with the context vector
             decoder_input_combined = torch.cat(
-                (decoder_input.squeeze(0), gated_context), dim=1
+                (decoder_input.squeeze(0), context_vector), dim=1
             )
 
-            # Project combined input to decoder input space
+            # Project combined input to decoder GRU input space
             decoder_input_combined = self.attention_combine(
                 decoder_input_combined
-            ).unsqueeze(0)
+            ).unsqueeze(0) # Shape: (1, batch_size, rnn_hidden_size)
 
             # Decoder forward pass
+            # Input to GRU is the combined context and projected previous step info
             decoder_output, decoder_hidden = self.decoder(
                 decoder_input_combined, decoder_hidden
-            )
+            ) # decoder_output shape: (1, batch_size, rnn_hidden_size)
 
-            # Generate prediction for current timestep
-            output = self.fc_out(decoder_output.squeeze(0))
+            # Generate prediction for current timestep from the GRU output
+            output = self.fc_out(decoder_output.squeeze(0)) # Shape: (batch_size, 1)
             predictions[:, t] = output.squeeze(1)
 
-            # Teacher forcing: decide whether to use real target or prediction
+            use_teacher_forcing = False
             if target is not None and t < self.prediction_length - 1:
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
-                if use_teacher_forcing:
-                    # Convert target value to appropriate decoder input format
-                    next_input = target[:, t].unsqueeze(1).unsqueeze(0)
-                    # Project to hidden size dimension
-                    next_input = torch.zeros(
-                        1, batch_size, self.rnn_hidden_size, device=self.device
-                    ).scatter_(2, next_input.long(), 1.0)
-                    decoder_input = next_input
-                else:
-                    # Use prediction as next input
-                    decoder_input = decoder_output
+
+            if use_teacher_forcing:
+                next_val = target[:, t].unsqueeze(1) # Shape: (batch_size, 1)
             else:
-                # Use prediction as next input
-                decoder_input = decoder_output
+                # Use the model's own prediction from the current step as input for the next step
+                # Detach to prevent gradients from flowing back through this path during prediction use
+                next_val = output.detach() # Shape: (batch_size, 1)
+
+            # Project the chosen value (target or prediction) to the required dimension for the next decoder input
+            decoder_input = self.decoder_input_proj(next_val).unsqueeze(0) # Shape: (1, batch_size, rnn_hidden_size)
+
 
         return predictions

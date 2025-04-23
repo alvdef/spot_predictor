@@ -10,17 +10,13 @@ from utils import (
     ResultPlotter, 
     setup_logging, 
     get_logger,
-    # Import GPU utilities
     check_gpu_availability,
     setup_gpu_environment,
     log_gpu_info
 )
 
 # Initialize logging system for the entire application
-setup_logging(
-    log_level="INFO",
-    log_file="logs/spot_predictor.log",
-)
+setup_logging()
 logger = get_logger(__name__)
 
 logger.info("Starting spot price prediction pipeline")

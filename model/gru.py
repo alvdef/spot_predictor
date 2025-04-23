@@ -11,7 +11,7 @@ class GRU(Model):
         "output_scale",
         "input_size",
         "num_layers",
-        "prediction_length",
+        "tr_prediction_length",
         "feature_size",
     ]
 
@@ -28,7 +28,7 @@ class GRU(Model):
         )
 
         # Decoder for multi-step output
-        self.decoder = nn.Linear(config["hidden_size"], config["prediction_length"])
+        self.decoder = nn.Linear(config["hidden_size"], config["tr_prediction_length"])
 
         self._initialize_weights()
         self.to(self.device)
