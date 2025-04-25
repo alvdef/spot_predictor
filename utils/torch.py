@@ -2,7 +2,6 @@ from typing import Dict, Optional, Tuple
 import torch
 
 
-
 def get_device() -> torch.device:
     if torch.cuda.is_available():
         device = torch.device("cuda")

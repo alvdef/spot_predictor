@@ -67,12 +67,13 @@ class Training:
             weight_decay=self.config["weight_decay"],
             betas=(0.9, 0.999),  # Default betas work well for most time series tasks
         )
-        
+
         if resumed_training and self.metrics._learning_rate > 0:
             for param_group in self.optimizer.param_groups:
-                param_group['lr'] = self.metrics._learning_rate
-            self.logger.info(f"Restored learning rate to {self.metrics._learning_rate:.6e}")
-
+                param_group["lr"] = self.metrics._learning_rate
+            self.logger.info(
+                f"Restored learning rate to {self.metrics._learning_rate:.6e}"
+            )
 
     def prepare_normalizer(self, dataset: SpotDataset) -> None:
         """
@@ -128,7 +129,7 @@ class Training:
         self.logger.info(f"- Max learning rate: {self.config['max_learning_rate']}")
         self.logger.info(f"- Weight decay: {self.config['weight_decay']}")
         if start_epoch > 0:
-            self.logger.info(f"- Starting from epoch: {start_epoch}")    
+            self.logger.info(f"- Starting from epoch: {start_epoch}")
             self.logger.info(f"- Epochs left: {remaining_epochs}")
         else:
             self.logger.info(f"- Epochs: {remaining_epochs}")
@@ -192,17 +193,16 @@ class Training:
 
         except KeyboardInterrupt:
             self.logger.warning("Training interrupted by user")
-        
+
         except Exception as e:
             self.logger.error(f"Error during training: {str(e)}", exc_info=True)
             raise
-            
+
         finally:
             # Always save the current state regardless of how training ended
             self.logger.info("Saving current model state and metrics...")
             self.model.save()
             self.metrics.save()
-
 
     def _execute_training_phase(self, train_loader: DataLoader) -> Tuple[float, Dict]:
         self.model.train()
@@ -211,13 +211,16 @@ class Training:
         batch_count = 0
         grad_norm = torch.tensor(0.0, device=self.device)
 
-        # Use mixed precision for performance on compatible GPUs
-        scaler = torch.GradScaler(enabled=torch.cuda.is_available())
+        use_mixed_precision = torch.cuda.is_available() and self.device.type == "cuda"
+        scaler = torch.GradScaler(enabled=use_mixed_precision)
 
         with tqdm(train_loader, desc="Training", leave=False) as pbar:
             for data, target in pbar:
-                # Forward pass and loss calculation
-                with torch.autocast(device_type=self.device.type):
+                if use_mixed_precision:
+                    with torch.autocast(device_type=self.device.type):
+                        output = self.model(data, target)
+                        loss, metrics = self.criterion(output, target)
+                else:
                     output = self.model(data, target)
                     loss, metrics = self.criterion(output, target)
 

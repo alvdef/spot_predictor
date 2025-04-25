@@ -148,7 +148,7 @@ class Model(nn.Module, ABC):
             if self.normalizer and self.normalizer.has_instance(instance_ids[0]):
                 output = self.normalizer.denormalize(output, instance_ids)
 
-            steps_to_use = min(prediction_length, n_steps - steps_done)
+            steps_to_use = min(output.size(1), n_steps - steps_done)
 
             predictions[:, steps_done : steps_done + steps_to_use] = output[
                 :, :steps_to_use

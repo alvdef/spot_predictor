@@ -91,7 +91,9 @@ class Normalizer:
         if len(values) != len(instance_ids):
             raise ValueError("Number of values must match number of instance IDs")
 
-        use_global_stats = not all(instance_id in self.params for instance_id in instance_ids)
+        use_global_stats = not all(
+            instance_id in self.params for instance_id in instance_ids
+        )
         return self._apply_normalization(values, instance_ids, True, use_global_stats)
 
     def denormalize(
@@ -119,7 +121,9 @@ class Normalizer:
         if len(values) != len(instance_ids):
             raise ValueError("Number of values must match number of instance IDs")
 
-        use_global_stats = not all(instance_id in self.params for instance_id in instance_ids)
+        use_global_stats = not all(
+            instance_id in self.params for instance_id in instance_ids
+        )
         return self._apply_normalization(values, instance_ids, False, use_global_stats)
 
     def _apply_normalization(

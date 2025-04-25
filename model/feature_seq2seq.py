@@ -245,7 +245,9 @@ class FeatureSeq2Seq(Model):
         # Initialize decoder input - Start with a zero vector representing the previous step's output value projection
         # Shape (batch_size, 1) -> projected to (batch_size, rnn_hidden_size) -> unsqueezed to (1, batch_size, rnn_hidden_size)
         # We start with a scalar 0 projected.
-        decoder_input = self.decoder_input_proj(torch.zeros(batch_size, 1, device=self.device)).unsqueeze(0)
+        decoder_input = self.decoder_input_proj(
+            torch.zeros(batch_size, 1, device=self.device)
+        ).unsqueeze(0)
 
         predictions = torch.zeros(
             batch_size, self.prediction_length, device=self.device
@@ -266,16 +268,18 @@ class FeatureSeq2Seq(Model):
             # Project combined input to decoder GRU input space
             decoder_input_combined = self.attention_combine(
                 decoder_input_combined
-            ).unsqueeze(0) # Shape: (1, batch_size, rnn_hidden_size)
+            ).unsqueeze(
+                0
+            )  # Shape: (1, batch_size, rnn_hidden_size)
 
             # Decoder forward pass
             # Input to GRU is the combined context and projected previous step info
             decoder_output, decoder_hidden = self.decoder(
                 decoder_input_combined, decoder_hidden
-            ) # decoder_output shape: (1, batch_size, rnn_hidden_size)
+            )  # decoder_output shape: (1, batch_size, rnn_hidden_size)
 
             # Generate prediction for current timestep from the GRU output
-            output = self.fc_out(decoder_output.squeeze(0)) # Shape: (batch_size, 1)
+            output = self.fc_out(decoder_output.squeeze(0))  # Shape: (batch_size, 1)
             predictions[:, t] = output.squeeze(1)
 
             use_teacher_forcing = False
@@ -283,14 +287,15 @@ class FeatureSeq2Seq(Model):
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
 
             if use_teacher_forcing:
-                next_val = target[:, t].unsqueeze(1) # Shape: (batch_size, 1)
+                next_val = target[:, t].unsqueeze(1)  # Shape: (batch_size, 1)
             else:
                 # Use the model's own prediction from the current step as input for the next step
                 # Detach to prevent gradients from flowing back through this path during prediction use
-                next_val = output.detach() # Shape: (batch_size, 1)
+                next_val = output.detach()  # Shape: (batch_size, 1)
 
             # Project the chosen value (target or prediction) to the required dimension for the next decoder input
-            decoder_input = self.decoder_input_proj(next_val).unsqueeze(0) # Shape: (1, batch_size, rnn_hidden_size)
-
+            decoder_input = self.decoder_input_proj(next_val).unsqueeze(
+                0
+            )  # Shape: (1, batch_size, rnn_hidden_size)
 
         return predictions

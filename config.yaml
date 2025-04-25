@@ -1,9 +1,9 @@
-model_name: s
+model_name: eunorth1-test-1h
 
 sequence_config:
   timestep_hours: 4
   sequence_length_days: 20
-  window_step_days: 0.5
+  window_step_days: 20
   model_pred_days: 2
   evaluation_days: 1
   prediction_length_days: 20
@@ -46,7 +46,7 @@ loss_config:
   smoothing_factor: 10.0  # Controls sharpness of approximations
 
 training_hyperparams:
-  epochs: 20              # Num of training epochs
+  epochs: 2              # Num of training epochs
   learning_rate: 1e-4     # Initial learning rate for optimizer
   max_learning_rate: 2e-6 # Maximum learning rate for scheduler
   weight_decay: 5e-5      # L2 regularization factor

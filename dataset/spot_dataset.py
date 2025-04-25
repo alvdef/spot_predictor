@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 from utils import get_device, load_config, get_logger, extract_time_features
 
@@ -86,9 +87,13 @@ class SpotDataset(Dataset):
         self.features_tensor, self.feature_mapping = self._process_instance_features()
 
         # Create sequences with timestamps and time features
-        self.X, self.y, self.instance_ids, self.timestamps, self.time_features = (
-            self._create_sequences(df)
-        )
+        (
+            self.X,
+            self.y,
+            self.instance_ids,
+            self.timestamps,
+            self.time_features,
+        ) = self._create_sequences(df)
 
         self.logger.info(
             f"Dataset created with {len(self.X)} sequences on {self.device}"
@@ -192,51 +197,53 @@ class SpotDataset(Dataset):
             if len(group) < required_length:
                 continue
 
-            # Sort by timestamp to ensure correct order
+            # Sort and extract values and timestamps
             group = group.sort_values(by=self.TIME_COL)
-
-            # Extract values and timestamps
             values = group["spot_price"].values.astype(np.float32)
             time_values = group[self.TIME_COL]
 
-            # Calculate how many sequences we can extract
-            max_start_idx = len(values) - required_length
+            # Vectorized sliding windows for values
+            windows = sliding_window_view(values, required_length)[::window_step]
+            X_group = windows[:, :sequence_length]
+            Y_group = windows[:, sequence_length:]
 
-            # Generate all valid start indices
-            start_indices = range(0, max_start_idx + 1, window_step)
+            # Precompute time features for all timestamps once
+            full_time_feat = np.array(
+                extract_time_features(time_values, self.config["time_features"]),
+                dtype=np.float32,
+            )
+            time_feat_windows = sliding_window_view(
+                full_time_feat, sequence_length, axis=0
+            )[::window_step]
 
-            for start_idx in start_indices:
-                end_x_idx = start_idx + sequence_length
-                end_y_idx = end_x_idx + prediction_length
-
-                # Create input and target sequences
-                sequences.append(values[start_idx:end_x_idx])
-                targets.append(values[end_x_idx:end_y_idx])
+            # Collect sequences
+            for i in range(X_group.shape[0]):
+                sequences.append(X_group[i])
+                targets.append(Y_group[i])
                 ids.append(instance_id)
-
-                # Store timestamps for the entire sequence (input + target)
-                seq_timestamps = time_values.iloc[start_idx:end_y_idx].tolist()
+                # Full timestamps for input+target
+                seq_timestamps = time_values.iloc[
+                    i * window_step : i * window_step + required_length
+                ].tolist()
                 timestamps_list.append(seq_timestamps)
-
-                # Extract time features for input sequence only
-                input_timestamps = time_values.iloc[start_idx:end_x_idx]
-                seq_time_features = extract_time_features(
-                    input_timestamps, self.config["time_features"]
-                )
-                time_features_list.append(seq_time_features)
+                # Corresponding time features
+                time_features_list.append(time_feat_windows[i])
 
         if not sequences:
             raise ValueError("No valid sequences could be created")
 
-        # Convert lists to tensors directly
         X_tensor = torch.tensor(
-            np.array(sequences), dtype=torch.float32, device=self.device
+            np.array(sequences, dtype=np.float32),
+            dtype=torch.float32,
+            device=self.device,
         ).unsqueeze(-1)
         y_tensor = torch.tensor(
-            np.array(targets), dtype=torch.float32, device=self.device
+            np.array(targets, dtype=np.float32), dtype=torch.float32, device=self.device
         )
         time_features_tensor = torch.tensor(
-            np.array(time_features_list), dtype=torch.float32, device=self.device
+            np.array(time_features_list, dtype=np.float32),
+            dtype=torch.float32,
+            device=self.device,
         )
 
         self.logger.info(f"Created {len(ids)} sequences from {len(set(ids))} instances")
@@ -314,7 +321,7 @@ class SpotDataset(Dataset):
             batch_size=self.config["batch_size"],
             shuffle=shuffle,
             pin_memory=True,
-            num_workers=2 if self.device.type is not 'mps' else 0
+            num_workers=2 if self.device.type != "mps" else 0,
         )
 
     def __len__(self) -> int:

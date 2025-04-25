@@ -6,13 +6,13 @@ from model import get_model
 from procedures import Training, Evaluate
 from dataset import SpotDataset, LoadSpotDataset
 from utils import (
-    get_name, 
-    ResultPlotter, 
-    setup_logging, 
+    get_name,
+    ResultPlotter,
+    setup_logging,
     get_logger,
     check_gpu_availability,
     setup_gpu_environment,
-    log_gpu_info
+    log_gpu_info,
 )
 
 # Initialize logging system for the entire application
@@ -26,7 +26,9 @@ gpu_info = check_gpu_availability()
 if gpu_info["gpu_available"]:
     logger.info(f"GPU detected: {gpu_info['device_count']} available")
     for gpu in gpu_info["gpu_info"]:
-        logger.info(f"Using GPU {gpu['index']}: {gpu['name']} ({gpu['memory_total']:.2f} GB)")
+        logger.info(
+            f"Using GPU {gpu['index']}: {gpu['name']} ({gpu['memory_total']:.2f} GB)"
+        )
     setup_gpu_environment()
     log_gpu_info()
 else:

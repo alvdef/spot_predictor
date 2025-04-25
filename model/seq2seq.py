@@ -29,7 +29,7 @@ class Seq2Seq(Model):
         self.base_hidden_size = config["hidden_size"]
         self.num_layers = config["num_layers"]
         self.prediction_length = config["tr_prediction_length"]
-        
+
         self.rnn_hidden_size = self.base_hidden_size
         self.attention_hidden_size = self.base_hidden_size // 2
 
@@ -105,9 +105,11 @@ class Seq2Seq(Model):
         # Reshape the decoder hidden state correctly
         # Take just the first layer of the decoder hidden state, but keep all features
         decoder_hidden_for_attn = decoder_hidden[0:1]
-        
+
         # Use expand instead of repeat for better memory efficiency
-        decoder_hidden_expanded = decoder_hidden_for_attn.permute(1, 0, 2).expand(-1, seq_len, -1)
+        decoder_hidden_expanded = decoder_hidden_for_attn.permute(1, 0, 2).expand(
+            -1, seq_len, -1
+        )
 
         # Concatenate encoder outputs and decoder hidden state
         energy_input = torch.cat((encoder_outputs, decoder_hidden_expanded), dim=2)
@@ -149,15 +151,19 @@ class Seq2Seq(Model):
         decoder_hidden = encoder_hidden
 
         # Initialize decoder input
-        decoder_input = torch.zeros(1, batch_size, self.rnn_hidden_size, device=self.device)
+        decoder_input = torch.zeros(
+            1, batch_size, self.rnn_hidden_size, device=self.device
+        )
 
         # Store predictions
         predictions = torch.zeros(
             batch_size, self.prediction_length, device=self.device
         )
-        
+
         # Pre-allocate tensor for teacher forcing to avoid repeated allocations
-        zero_input = torch.zeros(1, batch_size, self.rnn_hidden_size, device=self.device)
+        zero_input = torch.zeros(
+            1, batch_size, self.rnn_hidden_size, device=self.device
+        )
 
         # Decode sequence
         for t in range(self.prediction_length):
