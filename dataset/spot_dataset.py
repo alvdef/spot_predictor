@@ -95,10 +95,8 @@ class SpotDataset(Dataset):
             self.time_features,
         ) = self._create_sequences(df)
 
-        self.logger.info(
-            f"Dataset created with {len(self.X)} sequences on {self.device}"
-        )
-        self.logger.info(f"Input shape: {self.X.shape}, Target shape: {self.y.shape}")
+        self.logger.info(f"Dataset created with {len(self.X)} sequences")
+        self.logger.info(f"Context shape: {self.X.shape}, Target shape: {self.y.shape}")
         self.logger.info(f"Instance feature shape: {self.features_tensor.shape}")
         self.logger.info(f"Time feature shape: {self.time_features.shape}")
 
@@ -147,9 +145,7 @@ class SpotDataset(Dataset):
         feature_mapping = {
             instance_id: idx for idx, instance_id in enumerate(instance_ids)
         }
-        features_tensor = torch.tensor(
-            features_df.values, dtype=torch.float32, device=self.device
-        )
+        features_tensor = torch.tensor(features_df.values, dtype=torch.float32)
 
         return features_tensor, feature_mapping
 
@@ -235,15 +231,13 @@ class SpotDataset(Dataset):
         X_tensor = torch.tensor(
             np.array(sequences, dtype=np.float32),
             dtype=torch.float32,
-            device=self.device,
         ).unsqueeze(-1)
         y_tensor = torch.tensor(
-            np.array(targets, dtype=np.float32), dtype=torch.float32, device=self.device
+            np.array(targets, dtype=np.float32), dtype=torch.float32
         )
         time_features_tensor = torch.tensor(
             np.array(time_features_list, dtype=np.float32),
             dtype=torch.float32,
-            device=self.device,
         )
 
         self.logger.info(f"Created {len(ids)} sequences from {len(set(ids))} instances")
@@ -272,9 +266,7 @@ class SpotDataset(Dataset):
         """
         if instance_id is not None:
             # Use tensor indexing for better performance
-            mask = torch.tensor(
-                [iid == instance_id for iid in self.instance_ids], device=self.device
-            )
+            mask = torch.tensor([iid == instance_id for iid in self.instance_ids])
             if not mask.any():
                 raise ValueError(f"Instance ID {instance_id} not found in dataset")
 
@@ -321,7 +313,7 @@ class SpotDataset(Dataset):
             batch_size=self.config["batch_size"],
             shuffle=shuffle,
             pin_memory=True,
-            num_workers=2 if self.device.type != "mps" else 0,
+            num_workers=0,
         )
 
     def __len__(self) -> int:

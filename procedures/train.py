@@ -216,6 +216,10 @@ class Training:
 
         with tqdm(train_loader, desc="Training", leave=False) as pbar:
             for data, target in pbar:
+                # Move CPU tensors to the correct device asynchronously to leverage pinned memory transfers
+                data = tuple(d.to(self.device, non_blocking=True) for d in data)
+                target = target.to(self.device, non_blocking=True)
+
                 if use_mixed_precision:
                     with torch.autocast(device_type=self.device.type):
                         output = self.model(data, target)
