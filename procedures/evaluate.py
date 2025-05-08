@@ -9,9 +9,12 @@ from datetime import date
 from torch.utils.data import DataLoader
 
 from utils import (
-    calculate_significant_trend_accuracy,
-    calculate_spot_price_savings,
-    calculate_perfect_information_savings,
+    significant_trend_accuracy,
+    spot_price_savings,
+    perfect_information_savings,
+    calculate_savings_efficiency,
+    mean_absolute_percentage_error,
+    root_mean_squared_error,
     get_logger,
     get_device,
     load_config,
@@ -99,6 +102,9 @@ class Evaluate:
             all_predictions = []
 
             for inputs, targets in instance_loader:
+                inputs = tuple(d.to(self.device, non_blocking=True) for d in inputs)
+                targets = targets.to(self.device, non_blocking=True)
+
                 predictions = self.model.forecast(
                     inputs,
                     self.config["prediction_length"],
@@ -251,7 +257,7 @@ class Evaluate:
         n_timesteps: int,
     ) -> List[Dict]:
         """
-        Calculate evaluation metrics using PyTorch operations for better efficiency.
+        Calculate evaluation metrics using centralized metric functions.
 
         Args:
             predictions: List of prediction tensors
@@ -267,20 +273,15 @@ class Evaluate:
         pred_tensor = torch.stack(predictions)
         target_tensor = torch.stack(targets)
 
-        sig_accuracy = calculate_significant_trend_accuracy(
+        # Use centralized metric functions for consistent calculations
+        sig_accuracy = significant_trend_accuracy(
             pred_tensor, target_tensor, significance_threshold
         )
-        cost_savings = calculate_spot_price_savings(
-            pred_tensor, target_tensor, decision_window
-        )
-        perfect_savings = calculate_perfect_information_savings(
-            target_tensor, decision_window
-        )
+        cost_savings = spot_price_savings(pred_tensor, target_tensor, decision_window)
+        perfect_savings = perfect_information_savings(target_tensor, decision_window)
 
-        if perfect_savings > 0:
-            savings_efficiency = (cost_savings / perfect_savings) * 100
-        else:
-            savings_efficiency = 100.0 if cost_savings == 0 else 0.0
+        # Calculate savings efficiency using centralized function
+        savings_efficiency = calculate_savings_efficiency(cost_savings, perfect_savings)
 
         n_segments = pred_tensor.shape[1] // n_timesteps
         metrics = []
@@ -291,15 +292,14 @@ class Evaluate:
             pred_segments = pred_tensor[:, start:end]
             target_segments = target_tensor[:, start:end]
 
-            abs_diff = torch.abs(pred_segments - target_segments)
-            abs_targets = torch.clamp_min(torch.abs(target_segments), 1e-10)
-
-            mape_values = abs_diff / abs_targets
+            # Use centralized metric functions
+            mape = mean_absolute_percentage_error(pred_segments, target_segments)
+            rmse = root_mean_squared_error(pred_segments, target_segments)
 
             segment_metrics = {
-                "n_timestep": start,
-                "mape": float(torch.mean(mape_values).item() * 100),
-                "mse": float(torch.mean((pred_segments - target_segments) ** 2).item()),
+                "n_timestep": i,
+                "mape": mape,
+                "rmse": rmse,
                 "sgnif_trend_acc": sig_accuracy,
                 "cost_savings": cost_savings,
                 "perfect_savings": perfect_savings,

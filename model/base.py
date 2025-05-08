@@ -1,11 +1,10 @@
 from typing import Dict, Any, Optional, Union, List, Tuple
-import numpy as np
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
 from dataset import Normalizer
-from utils import get_device, load_config, predict_future_time_features
+from utils import get_device, load_config, predict_future_time_features, get_logger
 
 
 class Model(nn.Module, ABC):
@@ -39,6 +38,7 @@ class Model(nn.Module, ABC):
         self.device = get_device()
         self.normalizer: Optional[Normalizer] = None
         self.work_dir = work_dir
+        self.logger = get_logger(__name__)
 
         self.config = load_config(
             f"{work_dir}/config.yaml", "model_config", self.__class__.REQUIRED_FIELDS
@@ -51,8 +51,42 @@ class Model(nn.Module, ABC):
             f"{work_dir}/config.yaml", "sequence_config", ["timestep_hours"]
         )["timestep_hours"]
 
+        self.derived_params = {}
         self._build_model(self.config)
+        self._log_model_parameters()
         self.initialized = True
+
+    def _log_model_parameters(self):
+        """Log key model parameters and dimensions for debugging and monitoring."""
+        model_name = self.__class__.__name__
+        self.logger.info(f"Initializing {model_name} with parameters:")
+
+        # Log configured parameters
+        self.logger.info("Model parameters:")
+        for key, value in self.config.items():
+            self.logger.info(f"- {key}: {value}")
+
+        # Log derived parameters set by subclasses
+        if self.derived_params:
+            for key, value in self.derived_params.items():
+                self.logger.info(f"- {key}: {value}")
+
+        # Log model size statistics
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        self.logger.info(f"Model statistics:")
+        self.logger.info(f"- Total parameters: {total_params:,}")
+        self.logger.info(f"- Trainable parameters: {trainable_params:,}")
+
+    def set_derived_param(self, key: str, value: Any) -> None:
+        """
+        Allow subclasses to set derived parameters for logging.
+
+        Args:
+            key: Name of the derived parameter
+            value: Value of the derived parameter
+        """
+        self.derived_params[key] = value
 
     def attach_normalizer(self, normalizer) -> None:
         """

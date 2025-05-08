@@ -5,7 +5,7 @@ import json
 import torch
 from collections import defaultdict
 
-from .logging_config import get_logger
+from ..logging_config import get_logger
 
 
 @dataclass
@@ -83,6 +83,8 @@ class MetricsTracker:
             self.logger.info(f"Loading previous training data from {self.history_path}")
             with open(self.history_path, "r") as f:
                 state_dict = json.load(f)
+                if len(state_dict["train_loss"]) == 0:
+                    return False
                 self.load_state_dict(state_dict)
             self.logger.info(
                 f"Successfully loaded training history from epoch {self._epoch}"
@@ -382,29 +384,6 @@ class MetricsTracker:
             + [lr_str, duration_str]
         )
         self.logger.info(" | ".join(row_parts))
-
-        # --- Detailed Logging ---
-        log_items = [f"Epoch {self._epoch}: TrainLoss={self._train_loss:.6f}"]
-        if self._val_loss is not None:
-            log_items.append(f"ValLoss={self._val_loss:.6f}")
-        if displayable_metrics:
-            metrics_str = ", ".join(
-                f"{k}={v:.4f}" for k, v in sorted(displayable_metrics.items())
-            )
-            if metrics_str:
-                log_items.append(f"Metrics=({metrics_str})")
-        log_items.append(f"LR={self._learning_rate:.1e}")
-        log_items.append(f"Time={self._epoch_duration:.1f}s")
-
-        # Add improvement status to log for clarity
-        if self._epochs_no_improve == 0 and self._epoch > 0:
-            log_items.append("(*Best*)")
-        elif self._epochs_no_improve > 0:
-            log_items.append(
-                f"(Patience {self._epochs_no_improve}/{self.early_stopping_patience})"
-            )
-
-        self.logger.info(", ".join(log_items))
 
     def _store_metric_keys(self, metrics_keys: Optional[List[str]]):
         """Stores the desired order of metric keys for consistent display."""

@@ -9,7 +9,6 @@ class LSTM(Model):
     REQUIRED_FIELDS = [
         "hidden_size",
         "output_scale",
-        "input_size",
         "num_layers",
         "tr_prediction_length",
     ]
@@ -20,7 +19,7 @@ class LSTM(Model):
     def _build_model(self, config: Dict[str, Any]) -> None:
         # LSTM encoder
         self.lstm = nn.LSTM(
-            input_size=config["input_size"],
+            input_size=1,
             hidden_size=config["hidden_size"],
             num_layers=config["num_layers"],
             batch_first=True,

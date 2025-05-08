@@ -73,7 +73,7 @@ def update_config_file(params):
     mse_weight = config["loss_config"]["mse_weight"]
     hidden_size = config["model_config"]["hidden_size"]
 
-    model_name = f"{reg_str}-{fam_str}-{gen_str}-{model_type}-{timestep}h-{pred_days}d-{mse_weight}wt-{hidden_size}hd"
+    model_name = f"{model_type}-{timestep}h-{pred_days}d-{mse_weight}wt-{hidden_size}hd"
 
     # Update the model name in the config
     config["model_name"] = model_name

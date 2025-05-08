@@ -274,6 +274,9 @@ class Training:
 
         with torch.no_grad():
             for data, target in val_loader:
+                data = tuple(d.to(self.device, non_blocking=True) for d in data)
+                target = target.to(self.device, non_blocking=True)
+
                 # Forward pass
                 output = self.model(data)
                 loss, metrics = self.criterion(output, target)

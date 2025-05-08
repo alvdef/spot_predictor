@@ -32,7 +32,7 @@ class FeatureSeq2Seq(Model):
         self.num_layers = config["num_layers"]
         self.prediction_length = config["tr_prediction_length"]
         self.instance_feature_size = config["instance_feature_size"]
-        self.time_feature_size = config["time_feature_size"]
+        self.time_feature_dim = config["time_feature_size"]
 
         # Derive component-specific hidden sizes
         # Scale feature networks based on input feature sizes
@@ -43,6 +43,13 @@ class FeatureSeq2Seq(Model):
         self.attention_hidden_size = self.base_hidden_size // 2
         self.time_embedding_size = self.base_hidden_size // 2
 
+        # Register derived parameters for logging
+        self.set_derived_param("feature_hidden_size", self.feature_hidden_size)
+        self.set_derived_param("rnn_hidden_size", self.rnn_hidden_size)
+        self.set_derived_param("attention_hidden_size", self.attention_hidden_size)
+        self.set_derived_param("time_embedding_size", self.time_embedding_size)
+        self.set_derived_param("time_feature_dim", self.time_feature_dim)
+
         # Instance feature processing network
         self.instance_feature_net = nn.Sequential(
             nn.Linear(self.instance_feature_size, self.feature_hidden_size),
@@ -52,9 +59,9 @@ class FeatureSeq2Seq(Model):
             nn.LayerNorm(self.rnn_hidden_size),
         )
 
-        # Time feature processing network
+        # Time feature processing network - updated to process the actual input size
         self.time_feature_net = nn.Sequential(
-            nn.Linear(self.time_feature_size, self.feature_hidden_size // 2),
+            nn.Linear(self.time_feature_dim, self.feature_hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(self.feature_hidden_size // 2, self.time_embedding_size),
@@ -103,6 +110,9 @@ class FeatureSeq2Seq(Model):
             num_layers=self.num_layers,
             batch_first=False,
         )
+
+        # Add decoder input projection - this was missing
+        self.decoder_input_proj = nn.Linear(1, self.rnn_hidden_size)
 
         # Output layer
         self.fc_out = nn.Linear(self.rnn_hidden_size, 1)
@@ -204,7 +214,7 @@ class FeatureSeq2Seq(Model):
             x: Tuple of (sequence, instance_features, time_features) where:
                - sequence: tensor of shape (batch_size, sequence_length, input_size)
                - instance_features: tensor of shape (batch_size, feature_size)
-               - time_features: tensor of shape (batch_size, sequence_length, time_feature_size)
+               - time_features: tensor of shape (batch_size, time_feature_size, sequence_length)
             target: Target sequence for teacher forcing of shape (batch_size, prediction_length)
 
         Returns:
@@ -217,7 +227,6 @@ class FeatureSeq2Seq(Model):
 
         # Process instance features
         instance_embedding = self.instance_feature_net(instance_features)
-        instance_embedding_2d = instance_embedding.squeeze(1)
 
         feature_hidden = self.feature_to_hidden(
             instance_embedding
@@ -226,10 +235,20 @@ class FeatureSeq2Seq(Model):
             self.num_layers, batch_size, self.rnn_hidden_size
         )  # Reshaped to match the GRU's expected dimensions
 
-        reshaped_time_features = time_features.view(-1, self.time_feature_size)
+        # Handle time features with correct reshaping
+        # The time_features shape from dataset is [batch_size, time_feature_size, seq_len]
+        # We need to transpose to get [batch_size, seq_len, time_feature_size]
+        time_features = time_features.transpose(1, 2)
+        time_feat_size = time_features.size(2)
+
+        # Flatten for processing
+        reshaped_time_features = time_features.reshape(-1, time_feat_size)
         processed_time_features = self.time_feature_net(reshaped_time_features)
 
-        processed_time_features = processed_time_features.view(batch_size, seq_len, -1)
+        # Reshape back to [batch_size, seq_len, time_embedding_size]
+        processed_time_features = processed_time_features.view(
+            batch_size, seq_len, self.time_embedding_size
+        )
 
         # Concatenate processed time features with input sequence
         sequence_with_time = torch.cat([sequence, processed_time_features], dim=2)
@@ -286,7 +305,7 @@ class FeatureSeq2Seq(Model):
             if target is not None and t < self.prediction_length - 1:
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
 
-            if use_teacher_forcing:
+            if use_teacher_forcing and target is not None:
                 next_val = target[:, t].unsqueeze(1)  # Shape: (batch_size, 1)
             else:
                 # Use the model's own prediction from the current step as input for the next step

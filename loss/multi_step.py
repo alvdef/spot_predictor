@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import LossFunction
+from utils import mean_absolute_percentage_error, mse_loss
 
 
 class MultiStepMSELoss(LossFunction):
@@ -28,25 +29,20 @@ class MultiStepMSELoss(LossFunction):
         if y_pred.shape != y_true.shape:
             y_pred = y_pred.view(y_true.shape)
 
-        # MSE loss for magnitude accuracy
-        mse_loss = F.mse_loss(y_pred, y_true)
+        # MSE loss for magnitude accuracy using the centralized function
+        mse_loss_value = mse_loss(y_pred, y_true)
 
-        # MAPE loss with improved stability
-        epsilon = 1e-8  # For numerical stability
-
-        # Clip values to avoid extreme outliers
-        y_true_safe = torch.clamp(y_true.abs(), min=epsilon)
-        abs_percentage_error = torch.abs((y_true - y_pred) / y_true_safe)
-        abs_percentage_error = torch.clamp(abs_percentage_error, max=10.0)
-        mape_loss = torch.mean(abs_percentage_error) * 100
+        # Calculate MAPE using the centralized function
+        with torch.no_grad():
+            mape_loss = mean_absolute_percentage_error(y_pred, y_true)
 
         # Metrics for logging
         metrics = {
-            "mse": mse_loss.item(),
-            "mape": mape_loss.item(),
+            "mse": mse_loss_value.item(),
+            "mape": mape_loss,
         }
 
-        return mse_loss, metrics
+        return mse_loss_value, metrics
 
     def get_metric_names(self) -> List[str]:
         """

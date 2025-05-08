@@ -191,6 +191,9 @@ class SpotDataset(Dataset):
         for instance_id, group in grouped_df:
             # Skip instances with insufficient data points
             if len(group) < required_length:
+                self.logger.warning(
+                    f"Skipped instance {instance_id} on building sequences"
+                )
                 continue
 
             # Sort and extract values and timestamps
@@ -358,8 +361,13 @@ class SpotDataset(Dataset):
 
     @property
     def len_time_features(self) -> int:
-        """Get the time features associated with a sequence."""
-        return len(self.time_features[0][0])
+        """Get the innermost dimension of time features."""
+        return self.time_features.shape[1]
+
+    @property
+    def time_features_shape(self) -> tuple:
+        """Get the full shape of time features (excluding batch dimension)."""
+        return (self.time_features.shape[1], self.time_features.shape[2])
 
     @property
     def len_instance_features(self) -> int:
