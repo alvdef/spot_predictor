@@ -83,10 +83,7 @@ class SpotDataset(Dataset):
         self.training = training
         self.instance_features_df = instance_features_df
 
-        # Process instance features
         self.features_tensor, self.feature_mapping = self._process_instance_features()
-
-        # Create sequences with timestamps and time features
         (
             self.X,
             self.y,
@@ -176,7 +173,6 @@ class SpotDataset(Dataset):
         )
         window_step = self.config["window_step"]
         required_length = sequence_length + prediction_length
-        self.logger.info(f"Required length for sequences {required_length}")
 
         # Use list comprehensions for better efficiency
         sequences = []
@@ -187,6 +183,14 @@ class SpotDataset(Dataset):
 
         # Group by instance_id for easier processing
         grouped_df = df.groupby("id_instance")
+
+        group_lengths = grouped_df.size()
+        min_len = group_lengths.min()
+        max_len = group_lengths.max()
+
+        self.logger.info(
+            f"Minimum required length for sequences {required_length}. Min group length: {min_len}, Max group length: {max_len}"
+        )
 
         for instance_id, group in grouped_df:
             # Skip instances with insufficient data points

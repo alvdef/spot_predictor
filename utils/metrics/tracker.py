@@ -383,6 +383,15 @@ class MetricsTracker:
             + metric_parts
             + [lr_str, duration_str]
         )
+
+        # Add improvement status to the table line for clarity
+        if self._epochs_no_improve == 0 and self._epoch > 0:
+            row_parts[-1] += " (*Best*)"
+        elif self._epochs_no_improve > 0:
+            row_parts[
+                -1
+            ] += f" (Patience {self._epochs_no_improve}/{self.early_stopping_patience})"
+
         self.logger.info(" | ".join(row_parts))
 
     def _store_metric_keys(self, metrics_keys: Optional[List[str]]):

@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, Union, List, Tuple
 import torch
 import torch.nn as nn
+import warnings
 from abc import ABC, abstractmethod
 
 from dataset import Normalizer
@@ -241,7 +242,17 @@ class Model(nn.Module, ABC):
             path: Path to load the model from
         """
         path = self.work_dir + "/model.pth"
-        checkpoint = torch.load(path, map_location=self.device)
+
+        # Suppress the FutureWarning about weights_only since we need to load
+        # normalizer parameters which aren't weights
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message="You are using torch.load with weights_only=False",
+            )
+            checkpoint = torch.load(path, map_location=self.device)
+
         if "config" in checkpoint:
             self.config = checkpoint["config"]
             if not hasattr(self, "initialized") or not self.initialized:

@@ -1,63 +1,59 @@
-dataset_config:
-  batch_size: 128
-  instance_features:
-  - generation
-  - modifiers
-  - size
-  time_features:
-  - dayofweek
-  - dayofmonth
+model_name: featureseq2seq-4h-2d
+
+sequence_config:
+  timestep_hours: 4
+  sequence_length_days: 20
+  window_step_days: 0.5
+  model_pred_days: 2
+  evaluation_days: 1
+  prediction_length_days: 20
+
 dataset_features:
   data_folder: data
-  end_date: 2025-04-21
+  start_date: 2024-01-01  # 2023-10-01
+  end_date: 2025-04-21    # 2024-12-30
+  regions: [eu-north-1]
+  # regions: [ap-northeast-1,ap-northeast-2,ap-northeast-3,ap-south-1, ap-southeast-1,ap-southeast-2,ca-central-1,eu-central-1,eu-north-1,eu-west-1,eu-west-2,eu-west-3,sa-east-1,us-east-1,us-east-2,us-west-1,us-west-2]
   instance_filters:
-    architectures:
-    - x86_64
-    generation:
-    - 5
-    - 6
-    - 7
-    - 8
-    instance_family:
-    - c
-    metal: false
-    product_description:
-    - Linux/UNIX
-  regions:
-  - eu-north-1
-  start_date: 2024-01-01
+    product_description: [Linux/UNIX]
+    # instance_type: [c5.large]
+    generation: [5, 6, 7, 8]
+    architectures: [x86_64]
+    # av_zone: []
+    instance_family: [c]
+    metal: False
+    # size: [nano, micro, small, medium, large, xlarge, 2xlarge]
   target_col: spot_price
   time_col: price_timestamp
-evaluate_config:
-  batch_size: 32
-  significance_threshold: 0.02
+
+dataset_config:             # sequence_length, window_step, prediction_length
+  batch_size: 128          # Num of samples per batch
+  instance_features: [generation, modifiers, size]
+  time_features: [dayofweek, dayofmonth]
+
+model_config:              # prediction_length
+  model_type: FeatureSeq2Seq
+  hidden_size: 64         # Num of hidden units in LSTM layers
+  num_layers: 2           # Num of stacked LSTM layers
+  output_scale: 1.0       # Scaling factor for model outputs to handle price ranges
+  shuffle_buffer: 1000     # Buffer size for dataset shuffling
+  teacher_forcing_ratio: 0.7
+
 loss_config:
   loss_type: TrendFocusLoss
-  mse_weight: 1.0
-  significant_threshold: 0.02
-  smoothing_factor: 10.0
-model_config:
-  hidden_size: 64
-  instance_feature_size: 20
-  model_type: FeatureSeq2Seq
-  num_layers: 2
-  output_scale: 1.0
-  shuffle_buffer: 1000
-  teacher_forcing_ratio: 0.7
-  time_feature_size: 120
-model_name: featureseq2seq-4h-2d
-sequence_config:
-  evaluation_days: 1
-  model_pred_days: 2
-  prediction_length_days: 20
-  sequence_length_days: 20
-  timestep_hours: 4
-  window_step_days: 0.5
+  mse_weight: 1.0         # Weight for MSE loss component. trend_weight is 1-mse_weight
+  significant_threshold: 0.02  # Threshold for significant price movements (as fraction)
+  smoothing_factor: 10.0  # Controls sharpness of approximations
+
 training_hyperparams:
-  div_factor: 10
-  epochs: 20
-  learning_rate: 1e-4
-  max_learning_rate: 2e-6
+  epochs: 2              # Num of training epochs
+  learning_rate: 1e-4     # Initial learning rate for optimizer
+  max_learning_rate: 2e-6 # Maximum learning rate for scheduler
+  weight_decay: 5e-5      # L2 regularization factor
   patience: 5
   pct_start: 0.2
-  weight_decay: 5e-5
+  div_factor: 10
+
+evaluate_config:           # prediction_length, n_timesteps_metrics
+  batch_size: 32          # Batch size for evaluation
+  significance_threshold: 0.02  # Added threshold for significance testing during evaluation
