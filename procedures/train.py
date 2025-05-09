@@ -216,9 +216,8 @@ class Training:
         with tqdm(train_loader, desc="Training", leave=False) as pbar:
             for data, target in pbar:
                 # Forward pass and loss calculation
-                with torch.autocast(device_type=self.device.type):
-                    output = self.model(data, target)
-                    loss, metrics = self.criterion(output, target)
+                output = self.model(data, target)
+                loss, metrics = self.criterion(output, target)
 
                 # Backward pass with optimization
                 self.optimizer.zero_grad(set_to_none=True)

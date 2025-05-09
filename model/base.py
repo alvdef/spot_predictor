@@ -1,11 +1,11 @@
 from typing import Dict, Any, Optional, Union, List, Tuple
-import numpy as np
 import torch
 import torch.nn as nn
+import warnings
 from abc import ABC, abstractmethod
 
 from dataset import Normalizer
-from utils import get_device, load_config, predict_future_time_features
+from utils import get_device, load_config, predict_future_time_features, get_logger
 
 
 class Model(nn.Module, ABC):
@@ -148,7 +148,7 @@ class Model(nn.Module, ABC):
             if self.normalizer and self.normalizer.has_instance(instance_ids[0]):
                 output = self.normalizer.denormalize(output, instance_ids)
 
-            steps_to_use = min(prediction_length, n_steps - steps_done)
+            steps_to_use = min(output.size(1), n_steps - steps_done)
 
             predictions[:, steps_done : steps_done + steps_to_use] = output[
                 :, :steps_to_use
@@ -207,7 +207,14 @@ class Model(nn.Module, ABC):
             path: Path to load the model from
         """
         path = self.work_dir + "/model.pth"
-        checkpoint = torch.load(path, map_location=self.device)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message="You are using torch.load with weights_only=False",
+            )
+            checkpoint = torch.load(path, map_location=self.device)
+
         if "config" in checkpoint:
             self.config = checkpoint["config"]
             if not hasattr(self, "initialized") or not self.initialized:

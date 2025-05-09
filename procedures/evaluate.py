@@ -23,6 +23,7 @@ from dataset import SpotDataset
 class Evaluate:
     REQUIRED_CONFIG_FIELDS = [
         "prediction_length",
+        "tr_prediction_length",
         "n_timesteps_metrics",
         "batch_size",
         "significance_threshold",
