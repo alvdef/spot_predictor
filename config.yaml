@@ -38,6 +38,7 @@ model_config:              # prediction_length
   output_scale: 1.0       # Scaling factor for model outputs to handle price ranges
   shuffle_buffer: 1000     # Buffer size for dataset shuffling
   teacher_forcing_ratio: 0.7
+  dropout_rate: 0.2
 
 loss_config:
   loss_type: TrendFocusLoss
