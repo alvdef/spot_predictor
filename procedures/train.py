@@ -85,7 +85,7 @@ class Training:
         """
         self.logger.info("Preparing normalizer for the model...")
 
-        normalizer = Normalizer(device=self.device)
+        normalizer = Normalizer()
 
         unique_ids = list(set(dataset.get_sequences()["instance_ids"]))
         for instance_id in unique_ids:
@@ -211,22 +211,12 @@ class Training:
         batch_count = 0
         grad_norm = torch.tensor(0.0, device=self.device)
 
-        use_mixed_precision = torch.cuda.is_available() and self.device.type == "cuda"
-        scaler = torch.GradScaler(enabled=use_mixed_precision)
+        scaler = torch.GradScaler()
 
         with tqdm(train_loader, desc="Training", leave=False) as pbar:
             for data, target in pbar:
-                # Move CPU tensors to the correct device asynchronously to leverage pinned memory transfers
-                data = tuple(d.to(self.device, non_blocking=True) for d in data)
-                target = target.to(self.device, non_blocking=True)
-
-                if use_mixed_precision:
-                    with torch.autocast(device_type=self.device.type):
-                        output = self.model(data, target)
-                        loss, metrics = self.criterion(output, target)
-                else:
-                    output = self.model(data, target)
-                    loss, metrics = self.criterion(output, target)
+                output = self.model(data, target)
+                loss, metrics = self.criterion(output, target)
 
                 # Backward pass with optimization
                 self.optimizer.zero_grad(set_to_none=True)
@@ -274,10 +264,6 @@ class Training:
 
         with torch.no_grad():
             for data, target in val_loader:
-                data = tuple(d.to(self.device, non_blocking=True) for d in data)
-                target = target.to(self.device, non_blocking=True)
-
-                # Forward pass
                 output = self.model(data)
                 loss, metrics = self.criterion(output, target)
 

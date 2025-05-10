@@ -13,29 +13,22 @@ class FeatureSeq2Seq(Model):
         "num_layers",
         "tr_prediction_length",
         "teacher_forcing_ratio",
+        "instance_feature_size",
+        "time_feature_size",
     ]
 
     def __init__(self, work_dir: str):
         super().__init__(work_dir)
 
     def _build_model(self, config: Dict[str, Any]) -> None:
-        """
-        Build the feature-enhanced seq2seq model with architecture that scales with feature sizes.
-
-        Uses separate hidden sizes for feature networks, encoder/decoder, and attention.
-
-        Args:
-            config: Dictionary containing model configuration parameters.
-        """
-        # Base configuration parameters
         self.base_hidden_size = config["hidden_size"]
         self.num_layers = config["num_layers"]
         self.prediction_length = config["tr_prediction_length"]
         self.instance_feature_size = config["instance_feature_size"]
-        self.time_feature_dim = config["time_feature_size"]
+        self.time_feature_dim = config[
+            "time_feature_size"
+        ]  # Matches variable name used later
 
-        # Derive component-specific hidden sizes
-        # Scale feature networks based on input feature sizes
         self.feature_hidden_size = max(
             self.base_hidden_size, min(128, self.instance_feature_size * 2)
         )
@@ -43,14 +36,12 @@ class FeatureSeq2Seq(Model):
         self.attention_hidden_size = self.base_hidden_size // 2
         self.time_embedding_size = self.base_hidden_size // 2
 
-        # Register derived parameters for logging
         self.set_derived_param("feature_hidden_size", self.feature_hidden_size)
         self.set_derived_param("rnn_hidden_size", self.rnn_hidden_size)
         self.set_derived_param("attention_hidden_size", self.attention_hidden_size)
         self.set_derived_param("time_embedding_size", self.time_embedding_size)
-        self.set_derived_param("time_feature_dim", self.time_feature_dim)
+        # self.set_derived_param("time_feature_dim", self.time_feature_dim) # Already a primary config
 
-        # Instance feature processing network
         self.instance_feature_net = nn.Sequential(
             nn.Linear(self.instance_feature_size, self.feature_hidden_size),
             nn.ReLU(),
@@ -59,7 +50,6 @@ class FeatureSeq2Seq(Model):
             nn.LayerNorm(self.rnn_hidden_size),
         )
 
-        # Time feature processing network - updated to process the actual input size
         self.time_feature_net = nn.Sequential(
             nn.Linear(self.time_feature_dim, self.feature_hidden_size // 2),
             nn.ReLU(),
@@ -68,137 +58,102 @@ class FeatureSeq2Seq(Model):
             nn.LayerNorm(self.time_embedding_size),
         )
 
-        # Define encoder
         self.encoder = nn.GRU(
-            input_size=1 + self.time_embedding_size,
+            input_size=1
+            + self.time_embedding_size,  # Assuming input sequence value is 1D
             hidden_size=self.rnn_hidden_size,
             num_layers=self.num_layers,
             batch_first=True,
             bidirectional=False,
         )
 
-        # Feature-aware initial hidden state generator
+        # Input to this Linear is rnn_hidden_size (from processed instance_embedding)
         self.feature_to_hidden = nn.Linear(
             self.rnn_hidden_size, self.num_layers * self.rnn_hidden_size
         )
 
-        # Combined features fusion layer
-        self.feature_fusion = nn.Sequential(
-            nn.Linear(
-                self.rnn_hidden_size + self.time_embedding_size, self.rnn_hidden_size
-            ),
-            nn.ReLU(),
-            nn.LayerNorm(self.rnn_hidden_size),
-        )
-
-        # Attention mechanism with separate dimension
+        # Attention mechanism
+        # Input: encoder_outputs (H_rnn) + decoder_hidden (H_rnn) + instance_features (H_rnn)
+        # Total = 3 * H_rnn
         self.attention = nn.Linear(
-            self.rnn_hidden_size * 2
-            + self.rnn_hidden_size,  # encoder, decoder, instance features
+            self.rnn_hidden_size * 3,
             self.attention_hidden_size,
         )
 
         self.attention_combine = nn.Linear(
-            self.rnn_hidden_size * 2,
+            self.rnn_hidden_size
+            * 2,  # prev_output_projected (H_rnn) + context_vector (H_rnn)
             self.rnn_hidden_size,
         )
 
-        # Define decoder
         self.decoder = nn.GRU(
-            input_size=self.rnn_hidden_size,
+            input_size=self.rnn_hidden_size,  # Output of attention_combine
             hidden_size=self.rnn_hidden_size,
             num_layers=self.num_layers,
-            batch_first=False,
+            batch_first=False,  # Expects (seq_len=1, batch, feature)
         )
 
-        # Add decoder input projection - this was missing
-        self.decoder_input_proj = nn.Linear(1, self.rnn_hidden_size)
+        self.decoder_input_proj = nn.Linear(
+            1, self.rnn_hidden_size
+        )  # Projects scalar prev_output/target
+        self.fc_out = nn.Linear(
+            self.rnn_hidden_size, 1
+        )  # Maps decoder GRU output to scalar prediction
 
-        # Output layer
-        self.fc_out = nn.Linear(self.rnn_hidden_size, 1)
-
-        self._initialize_weights()
         self.to(self.device)
 
-    def _initialize_weights(self) -> None:
-        """
-        Initialize model weights for faster convergence and training stability.
-
-        Different initialization techniques are used based on layer type:
-        - Orthogonal for RNN weights: Helps maintain gradient magnitudes through time steps. Prevents vanishing/exploding gradients.
-        - Xavier/Glorot for linear layers: Maintains variance across network depth. Keeps activations in good range across layers.
-        - Small uniform values for 1D weights: Prevents initial large values, work well as starting point for 1D weights.
-        - Zeros for biases: Allows the network to learn biases from scratch, without initial preference.
-        """
-        for name, param in self.named_parameters():
-            # Skip parameters without gradients
-            if not param.requires_grad:
-                continue
-
-            # Check parameter dimensions
-            if len(param.shape) >= 2:  # For parameters with 2 or more dimensions
-                if (
-                    "gru" in name.lower()
-                    or "lstm" in name.lower()
-                    or "rnn" in name.lower()
-                ):
-                    # Orthogonal initialization for recurrent layers - helps with gradient flow
-                    nn.init.orthogonal_(param)
-                else:
-                    # Xavier initialization for fully connected layers - balances activations
-                    nn.init.xavier_uniform_(param)
-            elif len(param.shape) == 1:  # For 1D parameters (biases, etc.)
-                if "bias" in name:
-                    # Zero initialization for biases
-                    nn.init.zeros_(param)
-                else:
-                    # Small uniform values for other 1D parameters
-                    nn.init.uniform_(param, -0.1, 0.1)
-
-    def _attention_mechanism(self, decoder_hidden, encoder_outputs, instance_embedding):
+    def _attention_mechanism(
+        self, decoder_hidden_all_layers, encoder_outputs, instance_embedding_2d
+    ):
         """
         Compute feature-aware attention weights and context vector.
-
-        Args:
-            decoder_hidden: Current decoder hidden state
-            encoder_outputs: All encoder outputs
-            instance_embedding: Instance feature embedding to condition attention
-
-        Returns:
-            context_vector: Context vector for the current timestep
-            attention_weights: Attention weights for visualization
+        Assumes instance_embedding_2d is already [batch_size, rnn_hidden_size].
         """
-        seq_len = encoder_outputs.size(1)
-        batch_size = encoder_outputs.size(0)
+        batch_size, seq_len, _ = encoder_outputs.size()
 
-        # Reshape the decoder hidden state correctly
-        decoder_hidden_for_attn = decoder_hidden[0:1]
-        decoder_hidden_expanded = decoder_hidden_for_attn.permute(1, 0, 2).repeat(
-            1, seq_len, 1
+        # Use the hidden state of the first layer of the decoder for attention
+        # decoder_hidden_all_layers shape: (num_layers, batch_size, rnn_hidden_size)
+        decoder_hidden_first_layer = decoder_hidden_all_layers[
+            0
+        ]  # Shape: (batch_size, rnn_hidden_size)
+
+        # Expand decoder hidden state to match encoder output sequence length
+        # (batch_size, rnn_hidden_size) -> (batch_size, 1, rnn_hidden_size) -> (batch_size, seq_len, rnn_hidden_size)
+        decoder_hidden_expanded = decoder_hidden_first_layer.unsqueeze(1).expand(
+            -1, seq_len, -1
         )
 
-        # Ensure instance_embedding has shape [batch_size, hidden_size]
-        if len(instance_embedding.shape) == 3 and instance_embedding.shape[1] == 1:
-            # Handle [batch_size, 1, hidden_size] case by removing the middle dimension
-            instance_embedding = instance_embedding.squeeze(1)
+        # Expand instance embedding to match encoder output sequence length
+        # instance_embedding_2d shape: (batch_size, rnn_hidden_size)
+        # (batch_size, rnn_hidden_size) -> (batch_size, 1, rnn_hidden_size) -> (batch_size, seq_len, rnn_hidden_size)
+        feature_expanded = instance_embedding_2d.unsqueeze(1).expand(-1, seq_len, -1)
 
-        # Expand to [batch_size, seq_len, hidden_size] for attention computation
-        # Use expand instead of repeat for better memory efficiency
-        feature_expanded = instance_embedding.unsqueeze(1).expand(-1, seq_len, -1)
-
-        # Concatenate encoder outputs, decoder hidden state, and instance features
+        # Concatenate for attention energy calculation
+        # Shapes: encoder_outputs (B,S,H), decoder_hidden_expanded (B,S,H), feature_expanded (B,S,H)
         energy_input = torch.cat(
             (encoder_outputs, decoder_hidden_expanded, feature_expanded), dim=2
-        )
+        )  # Shape: (batch_size, seq_len, 3 * rnn_hidden_size)
 
-        # Calculate attention energies
-        energy = torch.tanh(self.attention(energy_input))
-        attention_weights = F.softmax(torch.sum(energy, dim=2), dim=1).unsqueeze(2)
+        # Calculate attention energies and weights
+        # self.attention is Linear(3 * rnn_hidden_size, attention_hidden_size)
+        energy = torch.tanh(
+            self.attention(energy_input)
+        )  # Shape: (batch_size, seq_len, attention_hidden_size)
+        # Sum over the attention_hidden_size dimension to get a score per encoder timestep
+        attention_scores = torch.sum(energy, dim=2)  # Shape: (batch_size, seq_len)
+        attention_weights = F.softmax(attention_scores, dim=1).unsqueeze(
+            2
+        )  # Shape: (batch_size, seq_len, 1)
 
         # Compute context vector
+        # encoder_outputs.transpose(1,2) shape: (batch_size, rnn_hidden_size, seq_len)
+        # attention_weights shape: (batch_size, seq_len, 1)
+        # context_vector shape: (batch_size, rnn_hidden_size, 1) -> then squeezed
         context_vector = torch.bmm(
             encoder_outputs.transpose(1, 2), attention_weights
-        ).squeeze(2)
+        ).squeeze(
+            2
+        )  # Shape: (batch_size, rnn_hidden_size)
 
         return context_vector, attention_weights
 
@@ -207,114 +162,126 @@ class FeatureSeq2Seq(Model):
         x: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Forward pass through the model with feature conditioning and optional teacher forcing.
-
-        Args:
-            x: Tuple of (sequence, instance_features, time_features) where:
-               - sequence: tensor of shape (batch_size, sequence_length, input_size)
-               - instance_features: tensor of shape (batch_size, feature_size)
-               - time_features: tensor of shape (batch_size, time_feature_size, sequence_length)
-            target: Target sequence for teacher forcing of shape (batch_size, prediction_length)
-
-        Returns:
-            Predictions of shape (batch_size, prediction_length)
-        """
         teacher_forcing_ratio = self.config["teacher_forcing_ratio"]
-        sequence, instance_features, time_features = x
+        sequence, instance_features, time_features_original_shape = x
 
-        batch_size, seq_len, input_size = sequence.size()
+        batch_size, seq_len, _ = sequence.size()  # Assuming sequence input_size is 1
 
-        # Process instance features
-        instance_embedding = self.instance_feature_net(instance_features)
+        # 1. Process Instance Features
+        # Assuming instance_feature_net might produce (B,1,1,H_rnn) based on prior issues,
+        # or (B,H_rnn) if instance_features are "cleaner".
+        # We ensure it becomes (B, H_rnn).
+        raw_instance_embedding = self.instance_feature_net(instance_features)
 
-        feature_hidden = self.feature_to_hidden(
-            instance_embedding
-        )  # Transforms raw instance features into a dense embedding
-        feature_hidden = feature_hidden.view(
-            self.num_layers, batch_size, self.rnn_hidden_size
-        )  # Reshaped to match the GRU's expected dimensions
+        # Reshape raw_instance_embedding to (batch_size, rnn_hidden_size)
+        # This handles cases like (B,H), (B,1,H), (B,1,1,H) etc., as long as the
+        # total number of elements per batch item is rnn_hidden_size.
+        instance_embedding_2d = raw_instance_embedding.reshape(
+            batch_size, self.rnn_hidden_size
+        )
 
-        # Handle time features with correct reshaping
-        # The time_features shape from dataset is [batch_size, time_feature_size, seq_len]
-        # We need to transpose to get [batch_size, seq_len, time_feature_size]
-        time_features = time_features.transpose(1, 2)
-        time_feat_size = time_features.size(2)
+        # Create initial hidden state for encoder GRU from instance features
+        # feature_to_hidden input: (B, rnn_hidden_size)
+        # flat_initial_hidden output: (B, num_layers * rnn_hidden_size)
+        flat_initial_hidden = self.feature_to_hidden(instance_embedding_2d)
+        # Reshape to (num_layers, batch_size, rnn_hidden_size) for GRU
+        encoder_initial_hidden = (
+            flat_initial_hidden.view(batch_size, self.num_layers, self.rnn_hidden_size)
+            .permute(1, 0, 2)
+            .contiguous()
+        )
 
-        # Flatten for processing
-        reshaped_time_features = time_features.reshape(-1, time_feat_size)
-        processed_time_features = self.time_feature_net(reshaped_time_features)
+        # 2. Process Time Features
+        # time_features_original_shape: (batch_size, time_feature_dim, seq_len)
+        time_features_transposed = time_features_original_shape.transpose(
+            1, 2
+        )  # (B, seq_len, time_feature_dim)
 
-        # Reshape back to [batch_size, seq_len, time_embedding_size]
-        processed_time_features = processed_time_features.view(
+        # Flatten for time_feature_net: (B * seq_len, time_feature_dim)
+        reshaped_time_features = time_features_transposed.reshape(
+            -1, self.time_feature_dim
+        )
+        processed_time_features_flat = self.time_feature_net(
+            reshaped_time_features
+        )  # (B*S, time_embedding_size)
+
+        # Reshape back to (batch_size, seq_len, time_embedding_size)
+        time_embedding = processed_time_features_flat.view(
             batch_size, seq_len, self.time_embedding_size
         )
 
-        # Concatenate processed time features with input sequence
-        sequence_with_time = torch.cat([sequence, processed_time_features], dim=2)
+        # Concatenate sequence values with time embeddings for encoder input
+        sequence_with_time_embedding = torch.cat([sequence, time_embedding], dim=2)
 
-        # Encode the input sequence with feature-conditioned initial state
-        encoder_outputs, encoder_hidden = self.encoder(
-            sequence_with_time, feature_hidden
-        )
+        # 3. Encode
+        encoder_outputs, encoder_last_hidden = self.encoder(
+            sequence_with_time_embedding, encoder_initial_hidden
+        )  # encoder_outputs: (B,S,H_rnn), encoder_last_hidden: (L,B,H_rnn)
 
-        # For unidirectional GRU, use the encoder hidden state for the decoder
-        decoder_hidden = encoder_hidden
+        # 4. Decode
+        decoder_hidden = encoder_last_hidden  # Initial hidden state for decoder
 
-        # Initialize decoder input - Start with a zero vector representing the previous step's output value projection
-        # Shape (batch_size, 1) -> projected to (batch_size, rnn_hidden_size) -> unsqueezed to (1, batch_size, rnn_hidden_size)
-        # We start with a scalar 0 projected.
-        decoder_input = self.decoder_input_proj(
+        # Initial projected input for the decoder (based on a zero value)
+        # This represents the embedding of y_{t-1} for the first step.
+        # Shape: (1, batch_size, rnn_hidden_size)
+        projected_prev_output = self.decoder_input_proj(
             torch.zeros(batch_size, 1, device=self.device)
-        ).unsqueeze(0)
+        )  # (B, rnn_hidden_size)
 
         predictions = torch.zeros(
             batch_size, self.prediction_length, device=self.device
         )
 
-        # Decode sequence
         for t in range(self.prediction_length):
-            # Calculate attention weights and context vector using instance features
-            context_vector, attention_weights = self._attention_mechanism(
-                decoder_hidden, encoder_outputs, instance_embedding
-            )
+            # Attention: decoder_hidden is (L,B,H), encoder_outputs is (B,S,H), instance_embedding_2d is (B,H)
+            (
+                context_vector,
+                _,
+            ) = self._attention_mechanism(  # We don't need attention_weights here
+                decoder_hidden, encoder_outputs, instance_embedding_2d
+            )  # context_vector: (B, rnn_hidden_size)
 
-            # Combine the projected previous output/target with the context vector
-            decoder_input_combined = torch.cat(
-                (decoder_input.squeeze(0), context_vector), dim=1
-            )
+            # Combine projected previous output and current context vector
+            # projected_prev_output: (B, rnn_hidden_size), context_vector: (B, rnn_hidden_size)
+            combined_input_for_gru_proj = torch.cat(
+                (projected_prev_output, context_vector), dim=1
+            )  # (B, 2 * rnn_hidden_size)
 
-            # Project combined input to decoder GRU input space
-            decoder_input_combined = self.attention_combine(
-                decoder_input_combined
+            # Project this combination to the decoder GRU's expected input size
+            # self.attention_combine: Linear(2*H_rnn, H_rnn)
+            decoder_gru_input = self.attention_combine(
+                combined_input_for_gru_proj
             ).unsqueeze(
                 0
-            )  # Shape: (1, batch_size, rnn_hidden_size)
+            )  # Shape: (1, batch_size, rnn_hidden_size) for GRU
 
-            # Decoder forward pass
-            # Input to GRU is the combined context and projected previous step info
+            # Decoder GRU step
+            # decoder_gru_input: (1,B,H_rnn), decoder_hidden: (L,B,H_rnn)
             decoder_output, decoder_hidden = self.decoder(
-                decoder_input_combined, decoder_hidden
-            )  # decoder_output shape: (1, batch_size, rnn_hidden_size)
+                decoder_gru_input, decoder_hidden
+            )  # decoder_output: (1,B,H_rnn), decoder_hidden: (L,B,H_rnn)
 
-            # Generate prediction for current timestep from the GRU output
-            output = self.fc_out(decoder_output.squeeze(0))  # Shape: (batch_size, 1)
-            predictions[:, t] = output.squeeze(1)
+            # Generate scalar prediction for the current timestep
+            # self.fc_out: Linear(H_rnn, 1)
+            # decoder_output.squeeze(0): (B, H_rnn)
+            current_prediction_scalar = self.fc_out(decoder_output.squeeze(0))  # (B, 1)
+            predictions[:, t] = current_prediction_scalar.squeeze(1)
 
+            # Prepare for next iteration: select value for y_t (teacher forcing or model's prediction)
             use_teacher_forcing = False
-            if target is not None and t < self.prediction_length - 1:
+            if (
+                target is not None and t < self.prediction_length - 1
+            ):  # Only apply for relevant steps
                 use_teacher_forcing = random.random() < teacher_forcing_ratio
 
-            if use_teacher_forcing and target is not None:
-                next_val = target[:, t].unsqueeze(1)  # Shape: (batch_size, 1)
+            if use_teacher_forcing:
+                next_scalar_input = target[:, t].unsqueeze(1)  # (B, 1)
             else:
-                # Use the model's own prediction from the current step as input for the next step
-                # Detach to prevent gradients from flowing back through this path during prediction use
-                next_val = output.detach()  # Shape: (batch_size, 1)
+                next_scalar_input = current_prediction_scalar.detach()  # (B, 1)
 
-            # Project the chosen value (target or prediction) to the required dimension for the next decoder input
-            decoder_input = self.decoder_input_proj(next_val).unsqueeze(
-                0
-            )  # Shape: (1, batch_size, rnn_hidden_size)
+            # Project this scalar value for the next iteration's projected_prev_output
+            projected_prev_output = self.decoder_input_proj(
+                next_scalar_input
+            )  # (B, rnn_hidden_size)
 
         return predictions

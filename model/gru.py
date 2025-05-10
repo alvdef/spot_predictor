@@ -9,7 +9,6 @@ class GRU(Model):
     REQUIRED_FIELDS = [
         "hidden_size",
         "output_scale",
-        "input_size",
         "num_layers",
         "tr_prediction_length",
         "feature_size",
@@ -21,7 +20,7 @@ class GRU(Model):
     def _build_model(self, config: Dict[str, Any]) -> None:
         # GRU encoder
         self.gru = nn.GRU(
-            input_size=config["input_size"],
+            input_size=1,
             hidden_size=config["hidden_size"],
             num_layers=config["num_layers"],
             batch_first=True,
@@ -32,33 +31,6 @@ class GRU(Model):
 
         self._initialize_weights()
         self.to(self.device)
-
-    def _initialize_weights(self) -> None:
-        # Initialize GRU weights using orthogonal initialization for better gradient flow
-        # This helps with training stability in recurrent networks
-        for name, param in self.gru.named_parameters():
-            if "weight_ih" in name:
-                nn.init.xavier_uniform_(param)
-            elif "weight_hh" in name:
-                nn.init.orthogonal_(param)
-            elif "bias" in name:
-                nn.init.constant_(param, 0.0)
-
-        # For the decoder, use Kaiming initialization which works well for linear layers
-        # followed by non-linearities (if you add any later)
-        nn.init.kaiming_normal_(self.decoder.weight, nonlinearity="linear")
-        nn.init.constant_(self.decoder.bias, 0.0)
-
-        # Initialize feature network if it exists
-        if self.feature_size > 0:
-            for m in self.feature_net.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
-                    if m.bias is not None:
-                        nn.init.constant_(m.bias, 0.0)
-
-            nn.init.kaiming_normal_(self.combiner.weight, nonlinearity="relu")
-            nn.init.constant_(self.combiner.bias, 0.0)
 
     def forward(
         self,

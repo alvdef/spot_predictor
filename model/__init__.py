@@ -4,6 +4,7 @@ from .gru import GRU
 from .lstm import LSTM
 from .seq2seq import Seq2Seq
 from .feature_seq2seq import FeatureSeq2Seq
+from .feature_seq2seq_v2 import FeatureSeq2Seq_v2
 
 
 MODEL_REGISTRY = {
@@ -11,6 +12,7 @@ MODEL_REGISTRY = {
     "LSTM": LSTM,
     "Seq2Seq": Seq2Seq,
     "FeatureSeq2Seq": FeatureSeq2Seq,
+    "FeatureSeq2Seq_v2": FeatureSeq2Seq_v2,
 }
 
 

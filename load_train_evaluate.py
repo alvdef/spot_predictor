@@ -37,7 +37,6 @@ else:
 
 DIR = get_name()
 os.makedirs(DIR + "/data", exist_ok=True)
-os.makedirs("logs", exist_ok=True)
 
 os.system(f"cp config.yaml {DIR}")
 
