@@ -43,7 +43,8 @@ app = FastAPI(title="Spot Price Predictor API")
 @app.on_event("startup")
 def startup_event():
     global config, model, features_tensor, feature_mapping, instance_info_df, seq_cfg, device
-    api_dir = Path(__file__).parent
+    api_dir = Path(__file__).parent.parent / "data/api"
+    print(api_dir)
 
     # Load API config
     config = load_yaml(api_dir / "config.yaml")
